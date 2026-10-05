@@ -7,7 +7,7 @@ struct NotchBuddyApp: App {
 
     var body: some Scene {
         Settings {
-            SettingsView()
+            CoucouSettingsShell()
         }
     }
 }

@@ -5,20 +5,51 @@ import SwiftUI
 // Wired at the AppKit level in IslandWindowController (not via SwiftUI NSViewRepresentable)
 // so it never interferes with SwiftUI hit-testing.
 
+/// Where the current press started. A tray drag starts in this app, so the
+/// overlay must not take it. A Finder drag starts outside.
+@MainActor
+final class DropDragOrigin {
+    static let shared = DropDragOrigin()
+    var dragBeganOutside = false
+}
+
 final class FileDropNSView: NSView {
     var onDragEntered: ((CGPoint) -> Void)?
     var onDragUpdated: ((CGPoint) -> Void)?
     var onDragExited:  (() -> Void)?
-    var onFilesDropped: (([URL]) -> Void)?
+    var onFilesDropped: (([URL], CGPoint) -> Void)?
+
+    private var outsideMonitor: Any?
+    private var insideMonitor: Any?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         registerForDraggedTypes([.fileURL])
+        outsideMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) { event in
+            let outside = event.type == .leftMouseDown
+            MainActor.assumeIsolated { DropDragOrigin.shared.dragBeganOutside = outside }
+        }
+        insideMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) { event in
+            MainActor.assumeIsolated { DropDragOrigin.shared.dragBeganOutside = false }
+            return event
+        }
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    // Pass all mouse events through — drag-drop uses NSDraggingDestination, not hitTest
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    // Clicks pass through to SwiftUI. A file drag from another app must hit
+    // this view, or AppKit delivers it to the window underneath. A drag that
+    // starts on a tray file stays with SwiftUI so it can land on AirDrop.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard bounds.contains(point) else { return nil }
+        let types = (NSPasteboard(name: .drag).types ?? []).map(\.rawValue)
+        let dragBeganOutside = MainActor.assumeIsolated { DropDragOrigin.shared.dragBeganOutside }
+        let claim = NookLayout.claimsDropHit(
+            buttonDown: NSEvent.pressedMouseButtons & 1 != 0,
+            types: types,
+            dragBeganOutside: dragBeganOutside
+        )
+        return claim ? self : nil
+    }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         onDragEntered?(sender.draggingLocation)
@@ -35,7 +66,7 @@ final class FileDropNSView: NSView {
             forClasses: [NSURL.self],
             options: [.urlReadingFileURLsOnly: true]
         ) as? [URL], !urls.isEmpty else { return false }
-        onFilesDropped?(urls)
+        onFilesDropped?(urls, sender.draggingLocation)
         return true
     }
 }

@@ -4,13 +4,20 @@ import SwiftUI
 /// Uses a shared engine per-task; the main bot uses AppState's shared engine.
 struct BotCanvasView: View {
     @ObservedObject var state: AppState
+    @ObservedObject private var desk = TerminalDesk.shared
     var particleOverhang: CGFloat = 0
 
     // One engine per view instance (main bot)
     @StateObject private var engine = BotEngine()
 
+    /// The selected terminal decides the white cuddler's pose.
+    private var cuddler: BotState {
+        let face = desk.faces[desk.selectedID] ?? .idle
+        return TerminalBehavior.cuddlerState(for: cuddlerFace(face))
+    }
+
     var body: some View {
-        TimelineView(.animation(paused: state.mode == .hidden)) { timeline in
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
             Canvas { context, size in
                 let now = timeline.date.timeIntervalSinceReferenceDate
                 let dtRaw = min(0.05, now - engine.lastTime)
@@ -26,18 +33,18 @@ struct BotCanvasView: View {
                     engine.slotHTarget = 0
                     if engine.morph < 0.05 { engine.slotH = 0; engine.slotHVel = 0 }
                 }
-                // Integration pills have a fixed brand color → use it as bodyColor.
-                // Claude Code tasks use state-based gradient (working=blue, thinking=purple, etc.).
-                engine.bodyColor = (state.focusTask?.isIntegration == true)
-                    ? cgColorFromHex(state.focusTask!.color)
-                    : nil
+                // The white blob stays white. Terminal state tints it.
+                engine.bodyColor = nil
+                if engine.state != cuddler {
+                    engine.setState(cuddler)
+                }
                 engine.update(dt: dt)
                 engine.drawHandsBehind(context: context, size: size)
                 engine.draw(context: context, size: size)
                 engine.drawHandsAndExtras(context: context, size: size)
             }
         }
-        .onChange(of: state.effectiveState) { _, newState in
+        .onChange(of: cuddler) { _, newState in
             engine.setState(newState)
         }
         .onChange(of: state.view) { _, newView in
@@ -86,7 +93,15 @@ struct BotCanvasView: View {
             engine.greet()
         }
         .onAppear {
-            engine.setState(state.effectiveState, force: true)
+            engine.setState(cuddler, force: true)
+        }
+    }
+
+    private func cuddlerFace(_ face: TerminalFace) -> TerminalBehavior.Face {
+        switch face {
+        case .idle: return .idle
+        case .working: return .working
+        case .waiting: return .waiting
         }
     }
 
@@ -94,10 +109,15 @@ struct BotCanvasView: View {
         let screen = NSScreen.main ?? NSScreen.screens[0]
         let (islandW, islandH) = islandSize(mode: state.mode, view: state.view,
                                              progress: state.uploadProgress,
-                                             nw: state.notchWidth, nh: state.notchHeight)
+                                             nw: state.notchWidth, nh: state.notchHeight,
+                                             hasNotch: state.hasNotch)
+        let wing: CGFloat = (state.mode == .hidden || state.mode == .compact) ? NookBoard.shared.restingExtra : 0
         let (botCx, _, _, _) = botPosition(mode: state.mode, view: state.view,
                                             islandW: islandW, islandH: islandH,
-                                            uploadProgress: state.uploadProgress)
+                                            uploadProgress: state.uploadProgress,
+                                            hasNotch: state.hasNotch,
+                                            occludedHeight: state.hasNotch ? state.notchHeight : 0,
+                                            sideWing: wing, notchWidth: state.notchWidth)
         // Island is centered on screen; bot is at botCx within island coords
         let botScreenX = screen.frame.midX - islandW / 2 + botCx
         return tanh((state.mousePosition.x - botScreenX) / 260)
@@ -106,13 +126,23 @@ struct BotCanvasView: View {
     private func lookY(state: AppState, size: CGSize) -> CGFloat {
         let (islandW, islandH) = islandSize(mode: state.mode, view: state.view,
                                              progress: state.uploadProgress,
-                                             nw: state.notchWidth, nh: state.notchHeight)
+                                             nw: state.notchWidth, nh: state.notchHeight,
+                                             hasNotch: state.hasNotch)
+        let clearance = NotchClearance(occludedHeight: state.hasNotch ? state.notchHeight : 0)
         let actualH: CGFloat = (state.mode == .expanded && state.view == .prompt)
-            ? min(300, 240 + CGFloat(state.chatHistory.count) * 40)
+            ? TerminalBehavior.expandedDrawerHeight(
+                layoutHeight: min(300, 240 + CGFloat(state.chatHistory.count) * 40),
+                occludedHeight: clearance.occludedHeight,
+                headerInMenuBar: state.hasNotch
+            )
             : islandH
+        let wing: CGFloat = (state.mode == .hidden || state.mode == .compact) ? NookBoard.shared.restingExtra : 0
         let (_, botCy, _, _) = botPosition(mode: state.mode, view: state.view,
                                              islandW: islandW, islandH: actualH,
-                                             uploadProgress: state.uploadProgress)
+                                             uploadProgress: state.uploadProgress,
+                                             hasNotch: state.hasNotch,
+                                             occludedHeight: clearance.occludedHeight,
+                                             sideWing: wing, notchWidth: state.notchWidth)
         // Island top = screen top → bot screen Y = botCy from island top
         return -tanh((state.mousePosition.y - botCy) / 200)
     }
@@ -138,8 +168,12 @@ struct MiniBotCanvasView: View {
             Canvas { context, size in
                 let now = timeline.date.timeIntervalSinceReferenceDate
                 let dt = min(0.05, now - engine.lastTime)
+                if engine.state != task.state {
+                    engine.setState(task.state)
+                }
                 engine.update(dt: dt)
                 engine.draw(context: context, size: size)
+                engine.drawHandsAndExtras(context: context, size: size)
             }
         }
         .onChange(of: task.state) { _, newState in

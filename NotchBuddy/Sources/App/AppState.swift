@@ -40,9 +40,9 @@ final class AppState: ObservableObject {
     @Published var stateOverride: BotState? = nil
 
     // Real notch dimensions (set by IslandWindowController on launch)
-    var notchWidth:  CGFloat = IslandConst.notchWidth
-    var notchHeight: CGFloat = IslandConst.notchHeight
-    var hasNotch = true
+    @Published var notchWidth:  CGFloat = IslandConst.notchWidth
+    @Published var notchHeight: CGFloat = IslandConst.notchHeight
+    @Published var hasNotch = true
 
     // Last app active before NotchBuddy (for window context capture)
     var lastExternalApp: NSRunningApplication? = nil
@@ -58,6 +58,11 @@ final class AppState: ObservableObject {
 
     // Pinned (alerts that stay open, never auto-close)
     var isPinned: Bool = false
+
+    /// Extra height while the bottom tab is pulled down. Zero is the usual drawer.
+    @Published var drawerExtension: CGFloat = 0
+    /// True while the finger is on the pull tab, so the drawer does not close mid-drag.
+    @Published var drawerPulling: Bool = false
 
     // Upload progress (0-1) — set to 1.0 only at completion; animation is time-based
     @Published var uploadProgress: Double = 0
@@ -80,9 +85,24 @@ final class AppState: ObservableObject {
         didSet { UserDefaults.standard.set(claudeModel, forKey: "claudeModel") }
     }
 
+    /// Who answers notch chat: "claude" or "grok".
+    @Published var chatProvider: String = "claude" {
+        didSet { UserDefaults.standard.set(chatProvider, forKey: "chatProvider") }
+    }
+
+    static let defaultGrokModel = "grok-4.7"
+    @Published var grokModel: String = AppState.defaultGrokModel {
+        didSet { UserDefaults.standard.set(grokModel, forKey: "grokModel") }
+    }
+
     // Sound volume (0–0.2) — persisted, synced to SoundEngine
     @Published var soundVolume: Double = 0.12 {
         didSet {
+            let committed = SettingsBoard.commit(slider: "soundVolume", value: soundVolume) ?? soundVolume
+            if committed != soundVolume {
+                soundVolume = committed
+                return
+            }
             UserDefaults.standard.set(soundVolume, forKey: "soundVolume")
             SoundEngine.shared.volume = Float(soundVolume)
         }
@@ -142,7 +162,7 @@ final class AppState: ObservableObject {
     }
 
     // Active integration pills (VS Code excluded — always on). Max 4.
-    @Published var activeIntegrations: Set<String> = ["integration_resend", "integration_n8n", "integration_vercel", "integration_github"] {
+    @Published var activeIntegrations: Set<String> = [] {
         didSet {
             if let data = try? JSONEncoder().encode(Array(activeIntegrations)) {
                 UserDefaults.standard.set(data, forKey: "activeIntegrations")
@@ -193,9 +213,16 @@ final class AppState: ObservableObject {
         let ud = UserDefaults.standard
 
         if let v = ud.object(forKey: "soundEnabled") as? Bool   { soundEnabled = v }
-        if let v = ud.object(forKey: "soundVolume")  as? Double { soundVolume  = v }
+        if let v = ud.object(forKey: "soundVolume") as? Double {
+            soundVolume = SettingsBoard.commit(slider: "soundVolume", value: v) ?? v
+        }
         if let v = ud.string(forKey: "claudeModel"),
            !v.trimmingCharacters(in: .whitespaces).isEmpty { claudeModel = v }
+        if let v = ud.string(forKey: "chatProvider"), v == "claude" || v == "grok" {
+            chatProvider = v
+        }
+        if let v = ud.string(forKey: "grokModel"),
+           !v.trimmingCharacters(in: .whitespaces).isEmpty { grokModel = v }
         // Migrate old 60s default → 15s
         if let v = ud.object(forKey: "autoCloseInterval") as? Double {
             autoCloseInterval = (v == 60) ? 15 : v
@@ -211,6 +238,11 @@ final class AppState: ObservableObject {
            let a = try? JSONDecoder().decode([String].self, from: d) { n8nWorkflowFilter = Set(a) }
         if let d = ud.data(forKey: "activeIntegrations"),
            let a = try? JSONDecoder().decode([String].self, from: d) { activeIntegrations = Set(a) }
+        // These stay off the notch. The four colors are Terminal windows now.
+        activeIntegrations.subtract([
+            "integration_resend", "integration_n8n", "integration_vercel", "integration_github",
+            "integration_notion", "integration_calcom", "integration_stripe"
+        ])
 
         // Sync SoundEngine volume on launch
         SoundEngine.shared.volume = Float(soundVolume)

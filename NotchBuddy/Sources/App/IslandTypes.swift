@@ -11,7 +11,10 @@ enum IslandMode: String, CaseIterable {
 enum IslandView: String, CaseIterable {
     case overview, empty, approval, question, error, finished
     case confused, upload, uploading, choose, mail, prompt
-    case searching, result, note, settings, greeting
+    case searching, result, note, settings, greeting, nook, tray
+
+    /// Home and the other header controls stay on every page, including Nook.
+    var showsSharedHeader: Bool { true }
 }
 
 // MARK: - Bot State
@@ -83,13 +86,16 @@ enum IslandConst {
     static let notchWidth: CGFloat  = IslandScreenGeometry.fallbackNotchWidth
     static let notchHeight: CGFloat = 32
     static let expandedWidth: CGFloat = 640
+    /// Transparent panel. Tall enough for an open island plus the notch clearance.
+    static let panelWidth: CGFloat = 720
+    static let panelHeight: CGFloat = 400
     static let earRadius: CGFloat   = 14
     static let roundedCorner: CGFloat = 14    // hidden/peek/compact
     static let expandedCorner: CGFloat = 22
 
     static let viewLayouts: [IslandView: ViewLayout] = [
         // Home is the reference: height 150
-        .overview:  ViewLayout(height: 160, botX: 68,  botY: nil, botDiameter: 58, agentMode: .pills),
+        .overview:  ViewLayout(height: TerminalBehavior.overviewHeight, botX: 68, botY: TerminalBehavior.overviewBlobCenterY, botDiameter: 58, agentMode: .pills),
         // All non-chat views match home height (150) — law
         .empty:     ViewLayout(height: 160, botX: 70,  botY: nil, botDiameter: 62, agentMode: .none),
         .approval:  ViewLayout(height: 160, botX: 62,  botY: nil, botDiameter: 56, agentMode: .column),
@@ -108,6 +114,9 @@ enum IslandConst {
         .settings:  ViewLayout(height: 160, botX: 54,  botY: nil, botDiameter: 46, agentMode: .none),
         // Greeting: bot drawn by GreetingCanvasView; no BotPlacement needed
         .greeting:  ViewLayout(height: 150, botX: 320, botY: 90,  botDiameter: 0,  agentMode: .none),
+        // 232 of widgets plus the 34pt header the other pages already keep.
+        .nook:      ViewLayout(height: 266, botX: 68,  botY: nil, botDiameter: 0,  agentMode: .none),
+        .tray:      ViewLayout(height: 266, botX: 68,  botY: nil, botDiameter: 0,  agentMode: .none),
     ]
 
     // Project colors — keyed by lowercase display name or slug

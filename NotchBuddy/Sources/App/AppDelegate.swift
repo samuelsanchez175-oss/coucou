@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var statusItem: NSStatusItem?
     private(set) var islandController: IslandWindowController?
 
@@ -45,35 +45,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsWindow: NSWindow?
 
     @objc private func openSettings() {
-        // The island floats above every window; fold it away so it can't cover Settings.
-        if AppState.shared.mode == .expanded { islandController?.collapse() }
-
         if let w = settingsWindow, w.isVisible {
             placeBelowIsland(w)
             w.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); return
         }
-        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 720),
+        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 860, height: 640),
                            styleMask: [.titled, .closable, .miniaturizable, .resizable],
                            backing: .buffered, defer: false)
         win.title = "Settings — Coucou"
-        let host = NSHostingView(rootView: SettingsView())
-        host.sizingOptions = [.minSize]
+        let host = NSHostingView(rootView: CoucouSettingsShell())
+        host.sizingOptions = [.minSize, .standardBounds]
         win.contentView = host
-        win.contentMinSize = NSSize(width: 420, height: 320)
+        win.contentMinSize = NSSize(width: 720, height: 520)
         win.isReleasedWhenClosed = false
+        win.delegate = self
         placeBelowIsland(win)
         settingsWindow = win
         win.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    func windowWillClose(_ notification: Notification) {
+        guard let win = notification.object as? NSWindow, win === settingsWindow else { return }
+        NotificationCenter.default.post(name: .settingsNotchPreview, object: "closed")
+    }
+
     /// Centres the window horizontally and keeps its title bar clear of the island panel
-    /// (320 pt tall at the top of the notch screen), shrinking it to fit if needed.
+    /// at the top of the notch screen, shrinking it to fit if needed.
     private func placeBelowIsland(_ win: NSWindow) {
         let screen = IslandWindowController.notchScreen() ?? NSScreen.main ?? win.screen
         guard let screen else { win.center(); return }
         let visible = screen.visibleFrame
-        let islandBottom = screen.frame.maxY - 320 - 12   // island panel height + margin
+        let islandBottom = screen.frame.maxY - IslandConst.panelHeight - 12
         let top = min(visible.maxY, islandBottom)
         var frame = win.frame
         frame.size.height = min(frame.height, max(top - visible.minY - 12, win.minSize.height))
@@ -89,10 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         islandController?.showWindow(nil)
         islandController?.fsm.launch()
         HookServer.shared.start()
-        N8nPoller.shared.start()
-        VercelPoller.shared.start()
-        ResendPoller.shared.start()
-        GithubPoller.shared.start()
+        HudController.shared.start()
         StripePoller.shared.start()
         CalcomPoller.shared.start()
         NotionPoller.shared.start()

@@ -23,9 +23,21 @@
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAccessibilityUsageDescription</key>
-	<string>Pour lire le titre de la fenêtre active et l'attacher comme contexte.</string>
+	<string>Coucou reads the front window for the notch, and uses the volume and brightness keys so those changes can show in the notch.</string>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>Pour sauter au terminal et envoyer des mails.</string>
+	<string>Coucou asks Chrome or Safari to float the playing video, asks Terminal to run a line, and asks Logic Pro to split a song into stems.</string>
+	<key>NSAppleMusicUsageDescription</key>
+	<string>Coucou shows the song or video that is playing, including from Chrome, in the notch.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Coucou shows a connected Bluetooth device in the notch.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Coucou lists your calendars so you can choose which events appear in the notch.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Coucou lists your calendars so you can choose which events appear in the notch.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Coucou shows your front camera in the Mirror circle.</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>Coucou shows the playing video in a floating picture on the desktop you are already using.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSSupportsAutomaticGraphicsSwitching</key>

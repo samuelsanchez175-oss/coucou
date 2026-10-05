@@ -1,10 +1,20 @@
 import SwiftUI
-import ServiceManagement
 import AppKit
 
 struct SettingsView: View {
     @ObservedObject private var state = AppState.shared
     @State private var apiKey: String = KeychainStore.shared.get("anthropic-api-key") ?? ""
+    @State private var grokKey: String = KeychainStore.shared.get("xai-api-key") ?? ""
+    private static let grokPreset = "grok-4.7"
+    private static let grokCustomTag = "__grok_custom__"
+    @State private var grokChoice: String = {
+        let m = AppState.shared.grokModel
+        return m == SettingsView.grokPreset ? m : SettingsView.grokCustomTag
+    }()
+    @State private var grokCustom: String = {
+        let m = AppState.shared.grokModel
+        return m == SettingsView.grokPreset ? "" : m
+    }()
 
     // Claude model — dynamic list fetched from the API, static fallback if unavailable
     private static let fallbackModels: [(id: String, label: String)] = [
@@ -26,7 +36,6 @@ struct SettingsView: View {
     private var displayModels: [(id: String, label: String)] {
         fetchedModels.isEmpty ? Self.fallbackModels : fetchedModels
     }
-    @State private var launchAtStartup: Bool = (SMAppService.mainApp.status == .enabled)
     @State private var statusMessage: String = ""
     @State private var showDiff: Bool = false
     @State private var pendingHookJSON: String = ""
@@ -85,7 +94,7 @@ struct SettingsView: View {
                         SecureField("API key (sk-ant-…)", text: $apiKey)
                             .textFieldStyle(.roundedBorder)
                         Button("Save") {
-                            KeychainStore.shared.set("anthropic-api-key", value: apiKey)
+                            KeychainStore.shared.set("anthropic-api-key", value: SettingsBoard.keyToStore(apiKey))
                             statusMessage = "✓ Key saved."
                         }
                         .buttonStyle(.borderedProminent)
@@ -112,7 +121,49 @@ struct SettingsView: View {
                                 .onChange(of: customModel) { _, value in applyCustomModel(value) }
                         }
 
-                        Text("Used by the chat. The list comes from your Anthropic account.")
+                        Text("Used by the chat when Claude is selected. The list comes from your Anthropic account.")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(6)
+                }
+
+                GroupBox("Grok") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Picker("Notch chat uses", selection: $state.chatProvider) {
+                            Text("Claude").tag("claude")
+                            Text("Grok").tag("grok")
+                        }
+
+                        SecureField("API key from console.x.ai", text: $grokKey)
+                            .textFieldStyle(.roundedBorder)
+                        Button("Save Grok key") {
+                            let saved = SettingsBoard.grokKey(grokKey)
+                            saveKey("xai-api-key", value: saved.stored)
+                            state.objectWillChange.send()
+                            statusMessage = saved.message
+                        }
+                        .buttonStyle(.borderedProminent)
+
+                        Picker("Model", selection: $grokChoice) {
+                            Text("Grok 4.7").tag(Self.grokPreset)
+                            Text("Custom…").tag(Self.grokCustomTag)
+                        }
+                        .onChange(of: grokChoice) { _, choice in
+                            if choice != Self.grokCustomTag {
+                                state.grokModel = choice
+                            } else {
+                                applyGrokModel(grokCustom)
+                            }
+                        }
+
+                        if grokChoice == Self.grokCustomTag {
+                            TextField("Model ID (e.g. grok-4.7)", text: $grokCustom)
+                                .textFieldStyle(.roundedBorder)
+                                .onChange(of: grokCustom) { _, value in applyGrokModel(value) }
+                        }
+
+                        Text("The key stays in the Keychain on this Mac. Chat sends it only when Grok is selected.")
                             .font(.system(size: 11))
                             .foregroundColor(.secondary)
                     }
@@ -172,7 +223,11 @@ struct SettingsView: View {
                             HStack {
                                 Button("Confirm & write") { confirmInstall() }
                                     .buttonStyle(.borderedProminent)
-                                Button("Cancel") { showDiff = false; pendingHookJSON = "" }
+                                Button("Cancel") {
+                                    let draft = HookDraft.cancel()
+                                    showDiff = draft.showing
+                                    pendingHookJSON = draft.json
+                                }
                                     .buttonStyle(.bordered)
                             }
                         }
@@ -208,7 +263,11 @@ struct SettingsView: View {
                             HStack {
                                 Button("Confirm & write") { confirmGeminiOp() }
                                     .buttonStyle(.borderedProminent)
-                                Button("Cancel") { showGeminiDiff = false; pendingGeminiJSON = "" }
+                                Button("Cancel") {
+                                    let draft = HookDraft.cancel()
+                                    showGeminiDiff = draft.showing
+                                    pendingGeminiJSON = draft.json
+                                }
                                     .buttonStyle(.bordered)
                             }
                         }
@@ -241,7 +300,11 @@ struct SettingsView: View {
                             HStack {
                                 Button("Confirm & write") { confirmAgyOp() }
                                     .buttonStyle(.borderedProminent)
-                                Button("Cancel") { showAgyDiff = false; pendingAgyJSON = "" }
+                                Button("Cancel") {
+                                    let draft = HookDraft.cancel()
+                                    showAgyDiff = draft.showing
+                                    pendingAgyJSON = draft.json
+                                }
                                     .buttonStyle(.bordered)
                             }
                         }
@@ -253,64 +316,6 @@ struct SettingsView: View {
                 // MARK: Integrations
                 GroupBox("Integrations") {
                     VStack(alignment: .leading, spacing: 14) {
-
-                        // Resend
-                        VStack(alignment: .leading, spacing: 5) {
-                            HStack(spacing: 6) {
-                                Circle().fill(Color(hex: "#22C55E")).frame(width: 8, height: 8)
-                                Text("Resend").font(.system(size: 12, weight: .semibold))
-                            }
-                            SecureField("API key  (re_…)", text: $resendKey)
-                                .textFieldStyle(.roundedBorder)
-                            TextField("From address  (you@yourdomain.com)", text: $resendFrom)
-                                .textFieldStyle(.roundedBorder)
-                        }
-
-                        // n8n
-                        VStack(alignment: .leading, spacing: 5) {
-                            HStack(spacing: 6) {
-                                Circle().fill(Color(hex: "#F29B38")).frame(width: 8, height: 8)
-                                Text("n8n").font(.system(size: 12, weight: .semibold))
-                            }
-                            TextField("Instance URL  (https://…)", text: $n8nUrl)
-                                .textFieldStyle(.roundedBorder)
-                            SecureField("API key", text: $n8nKey)
-                                .textFieldStyle(.roundedBorder)
-                            IntegrationFilterRow(
-                                label: "Workflows",
-                                items: n8nWorkflows,
-                                filter: $state.n8nWorkflowFilter,
-                                loading: loadingN8n,
-                                onLoad: loadN8nWorkflows
-                            )
-                        }
-
-                        // Vercel
-                        VStack(alignment: .leading, spacing: 5) {
-                            HStack(spacing: 6) {
-                                Circle().fill(Color(hex: "#7C5CFF")).frame(width: 8, height: 8)
-                                Text("Vercel").font(.system(size: 12, weight: .semibold))
-                            }
-                            SecureField("Token", text: $vercelToken)
-                                .textFieldStyle(.roundedBorder)
-                            IntegrationFilterRow(
-                                label: "Projects",
-                                items: vercelProjects,
-                                filter: $state.vercelProjectFilter,
-                                loading: loadingVercel,
-                                onLoad: loadVercelProjects
-                            )
-                        }
-
-                        // GitHub
-                        VStack(alignment: .leading, spacing: 5) {
-                            HStack(spacing: 6) {
-                                Circle().fill(Color(hex: "#F4505E")).frame(width: 8, height: 8)
-                                Text("GitHub").font(.system(size: 12, weight: .semibold))
-                            }
-                            SecureField("Personal Access Token", text: $githubToken)
-                                .textFieldStyle(.roundedBorder)
-                        }
 
                         // Stripe
                         VStack(alignment: .leading, spacing: 5) {
@@ -355,9 +360,12 @@ struct SettingsView: View {
                         HStack(spacing: 8) {
                             Text("Volume")
                                 .frame(width: 56, alignment: .leading)
-                            Slider(value: $state.soundVolume, in: 0...0.2)
+                            Slider(value: Binding(
+                                get: { state.soundVolume },
+                                set: { state.soundVolume = SettingsBoard.commit(slider: "soundVolume", value: $0) ?? $0 }
+                            ), in: 0...0.2)
                                 .disabled(!state.soundEnabled)
-                            Text("\(Int(state.soundVolume / 0.2 * 100)) %")
+                            Text("\(SettingsBoard.soundPercent(state.soundVolume)) %")
                                 .frame(width: 36, alignment: .trailing)
                                 .monospacedDigit()
                         }
@@ -399,32 +407,6 @@ struct SettingsView: View {
                                 .foregroundColor(.secondary)
                         }
 
-                        Divider()
-
-                        Text("\(state.activeIntegrations.count)/4 slots used")
-                            .font(.system(size: 11))
-                            .foregroundColor(state.activeIntegrations.count >= 4 ? .orange : .secondary)
-
-                        ForEach(AgentTask.toggleableIntegrationIds, id: \.self) { id in
-                            let task = AgentTask.integrationAgents.first { $0.id == id }!
-                            let isOn = state.activeIntegrations.contains(id)
-                            let atMax = state.activeIntegrations.count >= 4 && !isOn
-                            HStack(spacing: 8) {
-                                Circle()
-                                    .fill(Color(hex: task.color))
-                                    .frame(width: 10, height: 10)
-                                Text(task.name)
-                                    .font(.system(size: 12))
-                                    .foregroundColor(atMax ? .secondary : .primary)
-                                Spacer()
-                                Toggle("", isOn: Binding(
-                                    get: { isOn },
-                                    set: { _ in state.toggleIntegration(id) }
-                                ))
-                                .labelsHidden()
-                                .disabled(atMax)
-                            }
-                        }
                     }
                     .padding(6)
                 }
@@ -450,12 +432,6 @@ struct SettingsView: View {
                 }
 
                 // MARK: Startup
-                GroupBox("Startup") {
-                    Toggle("Launch at Mac startup", isOn: $launchAtStartup)
-                        .onChange(of: launchAtStartup) { _, on in toggleStartup(on) }
-                        .padding(6)
-                }
-
                 if !statusMessage.isEmpty {
                     Text(statusMessage)
                         .font(.system(size: 12))
@@ -487,6 +463,7 @@ struct SettingsView: View {
             }
         }
         .frame(minWidth: 420, maxWidth: .infinity, minHeight: 320, maxHeight: .infinity)
+        .layoutPriority(1)
     }
 
     // MARK: - Actions
@@ -496,14 +473,9 @@ struct SettingsView: View {
         if !id.isEmpty { state.claudeModel = id }
     }
 
-    private func toggleStartup(_ on: Bool) {
-        do {
-            if on { try SMAppService.mainApp.register() }
-            else  { try SMAppService.mainApp.unregister() }
-        } catch {
-            statusMessage = "❌ Startup: \(error.localizedDescription)"
-            launchAtStartup = !on
-        }
+    private func applyGrokModel(_ value: String) {
+        let id = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !id.isEmpty { state.grokModel = id }
     }
 
     // MARK: - App Store: hooks via NSOpenPanel + security-scoped bookmark
@@ -662,10 +634,11 @@ struct SettingsView: View {
 
     /// Saves non-empty value; removes only if key was previously set (explicit user clear).
     private func saveKey(_ key: String, value: String) {
-        if value.isEmpty {
+        let stored = SettingsBoard.keyToStore(value)
+        if stored.isEmpty {
             KeychainStore.shared.remove(key)
         } else {
-            KeychainStore.shared.set(key, value: value)
+            KeychainStore.shared.set(key, value: stored)
         }
     }
 
@@ -763,7 +736,7 @@ struct IntegrationFilterRow: View {
                         .controlSize(.mini)
                 }
                 if !filter.isEmpty {
-                    Button("Clear") { filter = [] }
+                    Button("Clear") { filter = SettingsBoard.clearFilter() }
                         .buttonStyle(.bordered)
                         .controlSize(.mini)
                         .foregroundColor(.secondary)
@@ -775,13 +748,7 @@ struct IntegrationFilterRow: View {
                         Toggle(item, isOn: Binding(
                             get: { filter.isEmpty || filter.contains(item) },
                             set: { on in
-                                if on { filter.insert(item) }
-                                else  {
-                                    // First click on any item: switch from "all" to explicit set
-                                    if filter.isEmpty { filter = Set(items).subtracting([item]) }
-                                    else { filter.remove(item) }
-                                    if filter.count == items.count { filter = [] } // all = empty
-                                }
+                                filter = SettingsBoard.toggleFilter(item: item, on: on, filter: filter, items: items)
                             }
                         ))
                         .font(.system(size: 11))
@@ -813,10 +780,12 @@ struct ShortcutRecorderButton: View {
             var token: Any?
             token = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
                 let mods = event.modifierFlags.intersection([.command, .control, .option, .shift])
-                guard !mods.isEmpty else { return event }
+                guard let taken = SettingsBoard.shortcut(
+                    hasModifier: !mods.isEmpty, flags: mods.rawValue, keyCode: event.keyCode
+                ) else { return event }
                 DispatchQueue.main.async {
-                    self.flags = mods.rawValue
-                    self.code = event.keyCode
+                    self.flags = taken.flags
+                    self.code = taken.keyCode
                     self.isRecording = false
                     if let t = token { NSEvent.removeMonitor(t) }
                 }

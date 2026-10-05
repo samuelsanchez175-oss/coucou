@@ -17,6 +17,9 @@ final class IslandStateMachine {
     /// Fired on every transition: (from, to)
     var onTransition: ((State, State) -> Void)?
 
+    /// When false, the idle timer keeps the compact island on screen (demo mode).
+    var allowsHide: () -> Bool = { true }
+
     /// home → petit delay (seconds). Override for debug.
     var homeToPetitDelay: TimeInterval = 15
     /// petit → hidden delay (seconds). Override for debug.
@@ -90,13 +93,30 @@ final class IslandStateMachine {
         state = .hidden
     }
 
-    /// The app folded the island itself (Escape, Settings, OK button, auto-close).
-    /// Move to `.petit` right away so hover and click keep working; waiting for the
-    /// 15 s home timer left the island compact on screen while the FSM still said `.home`.
+    /// The app folded the island itself (Escape, the pull tab, auto-close).
+    /// Land on the notch. Stopping on the compact shelf left a wide bar behind.
     func collapse() {
         guard state == .home || state == .coucou else { return }
         cancelTimers()
-        transition(to: .petit)
+        transition(to: .hidden)
+    }
+
+    /// Settings is showing the open notch. Move to home without waiting for a click.
+    func showHome() {
+        cancelTimers()
+        if state != .home { transition(to: .home) }
+    }
+
+    /// Settings is showing the compact shelf. Keep it from hiding on its own.
+    func showPetit() {
+        cancelTimers()
+        if state != .petit { transition(to: .petit) }
+    }
+
+    /// Settings closed and the pointer is away. Shrink back to the notch.
+    func hideNow() {
+        cancelTimers()
+        if state != .hidden { transition(to: .hidden) }
     }
 
     /// Greeting animation finished (called at T.end ≈ 4.60 s).
@@ -132,7 +152,7 @@ final class IslandStateMachine {
     private func schedulePetitHide() {
         petitHideWork?.cancel()
         let item = DispatchWorkItem { [weak self] in
-            guard let self, self.state == .petit else { return }
+            guard let self, self.state == .petit, self.allowsHide() else { return }
             self.transition(to: .hidden)
         }
         petitHideWork = item
@@ -143,7 +163,7 @@ final class IslandStateMachine {
         homeCollapseWork?.cancel()
         let item = DispatchWorkItem { [weak self] in
             guard let self, self.state == .home else { return }
-            self.transition(to: .petit)
+            self.transition(to: .hidden)
         }
         homeCollapseWork = item
         DispatchQueue.main.asyncAfter(deadline: .now() + homeToPetitDelay, execute: item)

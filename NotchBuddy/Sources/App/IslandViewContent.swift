@@ -25,6 +25,8 @@ struct IslandViewContent: View {
         case .note:      NoteView(state: state)
         case .settings:  SettingsIslandView(state: state)
         case .greeting:  EmptyView()  // GreetingCanvasView overlaid in IslandRootView
+        case .nook:      NookView(state: state)
+        case .tray:      TrayView()
         }
     }
 }
@@ -38,7 +40,7 @@ struct OverviewView: View {
     var agent: AgentTask? { state.focusTask }
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: TerminalBehavior.overviewCardGap) {
             // Left card: title row + ticker below + ↗ button overlay
             ZStack(alignment: .topLeading) {
                 CardBackground(wash: nil)
@@ -109,11 +111,18 @@ struct OverviewView: View {
                     .frame(maxWidth: .infinity, alignment: .trailing)
                 }
             }
-            .frame(width: 322)
+            .frame(width: TerminalBehavior.overviewLeftCard)
+            .overlay(alignment: .bottom) {
+                if !showingN8nDetail {
+                    HomeAudioShelf()
+                        .padding(.horizontal, 8)
+                        .padding(.bottom, 8)
+                }
+            }
 
-            // Right card: agent pills
+            // Right card: four Terminal windows and the prompt
             CardBackground(wash: nil) {
-                AgentPillsView(state: state)
+                TerminalClusterView()
             }
         }
         .onChange(of: state.focusId) { _, _ in showingN8nDetail = false }
@@ -163,6 +172,115 @@ struct OverviewView: View {
                 #endif
             }
         }
+    }
+}
+
+/// Thumbnail, title, and transport under the white blob. Hidden until a title exists.
+struct HomeAudioShelf: View {
+    @ObservedObject private var board = NookBoard.shared
+    @ObservedObject private var prefs = NookPreferences.shared
+    @ObservedObject private var picture = PictureInPictureController.shared
+
+    var body: some View {
+        if NookPlayback.showsHomeAudio(title: board.mediaTitle) {
+            HStack(alignment: .center, spacing: 8) {
+                artwork
+                VStack(alignment: .leading, spacing: 2) {
+                    Button {
+                        board.showPlayingSource()
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(board.mediaTitle ?? "")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(.white)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.leading)
+                            if let artist = board.mediaArtist?.trimmingCharacters(in: .whitespacesAndNewlines), !artist.isEmpty {
+                                Text(artist)
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(Color(hex: "#A7ABB3"))
+                                    .lineLimit(1)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(board.mediaTitle ?? "Now playing")
+                    .help("Shows where this is playing.")
+                    HStack(spacing: 0) {
+                        control("backward.fill", "Previous") { board.skip(next: false) }
+                        control(
+                            board.mediaIsPlaying ? "pause.fill" : "play.fill",
+                            board.mediaIsPlaying ? "Pause" : "Play"
+                        ) { board.togglePlayback() }
+                        control("forward.fill", "Next") { board.skip(next: true) }
+                        control(
+                            NookPictureInPicture.buttonSymbol(active: picture.active),
+                            NookPictureInPicture.buttonLabel(active: picture.active)
+                        ) {
+                            picture.toggle(
+                                bundleID: board.mediaBundleID,
+                                displayName: board.mediaDisplayName,
+                                hasTitle: NookPlayback.showsHomeAudio(title: board.mediaTitle)
+                            )
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    if board.mediaDuration > 1 {
+                        HStack {
+                            Text(clock(board.mediaPosition))
+                            Spacer(minLength: 4)
+                            Text(clock(board.mediaDuration))
+                        }
+                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(Color(hex: "#A7ABB3"))
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func control(_ symbol: String, _ label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 26, height: 18)
+        }
+        .buttonStyle(.plain)
+        .disabled(!prefs.interactiveActivities)
+        .accessibilityLabel(label)
+        .help(label)
+    }
+
+    private func clock(_ seconds: Double) -> String {
+        let total = max(0, Int(seconds.rounded()))
+        return String(format: "%d:%02d", total / 60, total % 60)
+    }
+
+    private var artwork: some View {
+        Group {
+            if let path = board.artworkPath,
+               let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+               let image = NSImage(data: data) {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                ZStack {
+                    Color.white.opacity(0.08)
+                    Image(systemName: "music.note")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(.white)
+                }
+            }
+        }
+        .frame(width: 64, height: 64)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .accessibilityLabel("Now playing")
     }
 }
 
@@ -797,7 +915,11 @@ struct PromptView: View {
         state.chatHistory.append(ChatMessage(role: .user, content: query))
         state.stateOverride = .thinking
         Task {
-            await ClaudeService.shared.chat(query: query, context: state.promptContext, state: state)
+            if state.chatProvider == "grok" {
+                await GrokService.shared.chat(query: query, context: state.promptContext, state: state)
+            } else {
+                await ClaudeService.shared.chat(query: query, context: state.promptContext, state: state)
+            }
             await MainActor.run { focused = true }
         }
     }
@@ -2419,9 +2541,18 @@ struct CardBackground<Content: View>: View {
         }
     }
 
+    private var plate: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(
+            topLeadingRadius: IslandOutline.cardTopRadius,
+            bottomLeadingRadius: IslandOutline.cardBottomRadius,
+            bottomTrailingRadius: IslandOutline.cardBottomRadius,
+            topTrailingRadius: IslandOutline.cardTopRadius
+        )
+    }
+
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 20)
+            plate
                 .fill(Color(hex: "#141518"))
                 .overlay(
                     RadialGradient(
@@ -2433,10 +2564,10 @@ struct CardBackground<Content: View>: View {
                         startRadius: 0,
                         endRadius: 280
                     )
-                    .clipShape(RoundedRectangle(cornerRadius: 20))
+                    .clipShape(plate)
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 20)
+                    plate
                         .stroke(Color.white.opacity(0.035), lineWidth: 1)
                 )
 
@@ -2455,7 +2586,7 @@ extension CardBackground where Content == EmptyView {
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 20)
+            plate
                 .fill(Color(hex: "#141518"))
                 .overlay(
                     RadialGradient(
@@ -2467,10 +2598,10 @@ extension CardBackground where Content == EmptyView {
                         startRadius: 0,
                         endRadius: 280
                     )
-                    .clipShape(RoundedRectangle(cornerRadius: 20))
+                    .clipShape(plate)
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 20)
+                    plate
                         .stroke(Color.white.opacity(0.035), lineWidth: 1)
                 )
         }
@@ -2708,7 +2839,14 @@ struct SettingsIslandView: View {
     }
 
     private var apiConnected: Bool {
-        KeychainStore.shared.get("anthropic-api-key") != nil
+        if state.chatProvider == "grok" {
+            return KeychainStore.shared.get("xai-api-key") != nil
+        }
+        return KeychainStore.shared.get("anthropic-api-key") != nil
+    }
+
+    private var apiLabel: String {
+        state.chatProvider == "grok" ? "Grok" : "API"
     }
 
     var body: some View {
@@ -2758,7 +2896,7 @@ struct SettingsIslandView: View {
                 // Connection status
                 HStack(spacing: 14) {
                     StatusBadge(label: "Claude Code", ok: claudeConnected)
-                    StatusBadge(label: "API", ok: apiConnected)
+                    StatusBadge(label: apiLabel, ok: apiConnected)
                     Spacer()
                     Button("Settings…") {
                         NotificationCenter.default.post(name: .openFullSettings, object: nil)

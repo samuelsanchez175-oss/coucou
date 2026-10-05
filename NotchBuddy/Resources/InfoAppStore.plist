@@ -26,6 +26,14 @@
 	<string>public.app-category.developer-tools</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Coucou shows a connected Bluetooth device in the notch.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Coucou lists your calendars so you can choose which events appear in the notch.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Coucou lists your calendars so you can choose which events appear in the notch.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Coucou shows your front camera in the Mirror circle.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSSupportsAutomaticGraphicsSwitching</key>

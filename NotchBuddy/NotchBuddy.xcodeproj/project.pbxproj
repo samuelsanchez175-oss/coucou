@@ -8,18 +8,24 @@
 
 /* Begin PBXBuildFile section */
 		0329E76BA4A8FEEA8A6D76E7 /* ClaudeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A83D5410BD030B243ADDCFF4 /* ClaudeService.swift */; };
+		06137EFCF7BD5864C0C846CA /* CoucouSettingsShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9BFA3095FF2D95B02804A6D9 /* CoucouSettingsShell.swift */; };
 		065FCE817315454DE3F85F25 /* IslandViewContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA02B08886939FF6FE0475DD /* IslandViewContent.swift */; };
 		06BF5FD95E03010CAFDBF2D0 /* NotchBuddyApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1BD8F3CAA60CF37640759E1 /* NotchBuddyApp.swift */; };
 		091EC3B2F1060D7EE1317E4E /* IslandWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D710BD7834228045869D0184 /* IslandWindowController.swift */; };
 		0A267EE2955C7AD8E02A296C /* N8nPoller.swift in Sources */ = {isa = PBXBuildFile; fileRef = B89DA1A0C21AE3535A1760BB /* N8nPoller.swift */; };
+		0BA6F826C45BED888EC7F303 /* HudController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D5C2B062CED99899D039421 /* HudController.swift */; };
 		0D68A4C4E3422487DB7B2262 /* IslandScreenGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78BC1357785CA1B099A33969 /* IslandScreenGeometry.swift */; };
 		0E83C1DD4D20E7FB7A904450 /* VercelPoller.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71718D1B87A39A4879DD2A9D /* VercelPoller.swift */; };
 		0E9CE475EC53C67DAB00F8E5 /* BotEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4540F630F8BA04AFFFA3979 /* BotEngine.swift */; };
 		118FC4AE0AC74D84B4A134D8 /* VercelPoller.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71718D1B87A39A4879DD2A9D /* VercelPoller.swift */; };
 		1558BB00C530B721172F6E65 /* StripePoller.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EF78999D68D56ADE4CEFBE2 /* StripePoller.swift */; };
 		160EDB9D06275E2607DA5151 /* N8nPoller.swift in Sources */ = {isa = PBXBuildFile; fileRef = B89DA1A0C21AE3535A1760BB /* N8nPoller.swift */; };
+		174B251BEECB7CD1ADE4C9C2 /* TerminalDesk.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24CDAE765B43579A52AB573B /* TerminalDesk.swift */; };
 		186AB8904029767DAA5277CF /* IslandScreenGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78BC1357785CA1B099A33969 /* IslandScreenGeometry.swift */; };
+		18B5B4F4AB75861C00466E27 /* NookLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = A17C6A3002D9A97654005CE1 /* NookLayout.swift */; };
 		1969590AFEE6CB21404346F1 /* CalcomPoller.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3104222B3F17BA5E8DEA5277 /* CalcomPoller.swift */; };
+		1B2258442AB7BB6BF6EB3324 /* GrokService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3A0988B263F0BDB4C8B3A0B /* GrokService.swift */; };
+		1DEE6CAB1CB28282E17A3731 /* TerminalBehavior.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0936B6137F32D78D88E2BB2C /* TerminalBehavior.swift */; };
 		1F11EC4E6F604C612A1ADAD1 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2E4F18AA940EFF7E047B9F7 /* AppState.swift */; };
 		2132477000FD77F7EB234DAA /* FileDropView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3232F258523DD8D09B670363 /* FileDropView.swift */; };
 		2875610F701376BD65573386 /* WindowContextCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = E91B733ADC638E14E9BB6EFA /* WindowContextCapture.swift */; };
@@ -27,27 +33,49 @@
 		2CC2E3B688B15BBEB3AE3BCE /* WindowContextCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = E91B733ADC638E14E9BB6EFA /* WindowContextCapture.swift */; };
 		2DEB459FBD0BA3CEAAA5FDE9 /* ClaudeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A83D5410BD030B243ADDCFF4 /* ClaudeService.swift */; };
 		2F36E3C6C073E968A682AFA4 /* NotionPoller.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE03E03D1804B0B92C5C2DAD /* NotionPoller.swift */; };
+		31833C7C2FB6B18CAD361102 /* NookPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = E76F1632ABCE68B9B39283C9 /* NookPreferences.swift */; };
+		32EE53C97043D3CD25ED357E /* TerminalBehavior.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0936B6137F32D78D88E2BB2C /* TerminalBehavior.swift */; };
 		3756B7E1A55D9CEC8C4D34A4 /* IslandStateMachine.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8212018F09EA1E96FBD63CD /* IslandStateMachine.swift */; };
+		38F5F8ED3129DC09D7C32BDE /* TerminalNotchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4729BE7E5B2A9537D7A0D77 /* TerminalNotchView.swift */; };
 		3F19756A396F125EC711247F /* IslandTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D3CE3617E9D336DDBA10F7A /* IslandTypes.swift */; };
 		4117E7C8AA231AAE36E7509D /* UploadCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B241B043223AFBBFB7418A5E /* UploadCanvasView.swift */; };
+		41DBE926326DE1FDEC9CFEFF /* IslandMotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4EF96B784133C8903CCE5018 /* IslandMotion.swift */; };
+		44DE48C55E4286F0D52F02F1 /* GrokReplyText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5966269553BE7CC43239A6 /* GrokReplyText.swift */; };
+		45AD2B8E517C823E34FB0C21 /* NookIslandView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC751AC8FA328503D095A208 /* NookIslandView.swift */; };
+		4B1CA4F21E167AD829A98A84 /* HudController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D5C2B062CED99899D039421 /* HudController.swift */; };
 		4B6AC00F22EC75E90E0157D5 /* AppLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F6D7015D6A77AA59323C0E7 /* AppLog.swift */; };
 		4F1E0B3C838DA3CD6F864BC0 /* CalcomPoller.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3104222B3F17BA5E8DEA5277 /* CalcomPoller.swift */; };
 		56BE8C733F10A030A638FB60 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C1A7D5CBE2AC084A10C5FF3 /* SettingsView.swift */; };
+		A91C0E77B4D24F18C6E05A02 /* SettingsBoard.swift in Sources */ = {isa = PBXBuildFile; fileRef = B82D1F88C5E35029D7F16B13 /* SettingsBoard.swift */; };
+		C03D2A99D6F46130E8A27C24 /* SettingsBoard.swift in Sources */ = {isa = PBXBuildFile; fileRef = B82D1F88C5E35029D7F16B13 /* SettingsBoard.swift */; };
 		5B9A00AFB0837731FA678E4E /* IslandStateMachine.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8212018F09EA1E96FBD63CD /* IslandStateMachine.swift */; };
+		5EEBCCEA7130C48AB2F7E1FA /* NookIslandView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC751AC8FA328503D095A208 /* NookIslandView.swift */; };
+		60D225E2376567D4DAB81006 /* CoucouSettingsShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9BFA3095FF2D95B02804A6D9 /* CoucouSettingsShell.swift */; };
 		60E361FFE84C387E5E3ED1AA /* SoundEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BE21C2B315D37AA70ED45E9 /* SoundEngine.swift */; };
 		61CB7049490F61CFA1B36B64 /* AppLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F6D7015D6A77AA59323C0E7 /* AppLog.swift */; };
 		61F73B27A7E3AFF584B2CC22 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2E4F18AA940EFF7E047B9F7 /* AppState.swift */; };
 		62C4EE3F74DAA59764729E62 /* UploadCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B241B043223AFBBFB7418A5E /* UploadCanvasView.swift */; };
+		63D39E4713594676F1EF15E1 /* LiveActivityBehavior.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1B27F63FAAD513A199873B8 /* LiveActivityBehavior.swift */; };
 		651FA3F09608DE5D02D61CCE /* BotCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A29F4C0B02BE91654D02AA0C /* BotCanvasView.swift */; };
 		68A950E3C23FD612639D9776 /* IslandViewContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA02B08886939FF6FE0475DD /* IslandViewContent.swift */; };
+		68B57FDDE2D0EDE39FB221AE /* GrokService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3A0988B263F0BDB4C8B3A0B /* GrokService.swift */; };
+		6D6517EFDC1DB9E337528022 /* IslandMotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4EF96B784133C8903CCE5018 /* IslandMotion.swift */; };
+		6D85613133BF346F26D32B17 /* TerminalDesk.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24CDAE765B43579A52AB573B /* TerminalDesk.swift */; };
+		6F18AAC6A631C37FDB516327 /* LiveActivityBehavior.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1B27F63FAAD513A199873B8 /* LiveActivityBehavior.swift */; };
 		6FC65C190ED614C664C9BC17 /* SafeWebURL.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2FDED98F7F6C755A72C97A3 /* SafeWebURL.swift */; };
 		78B3C6814431B2DD9D1F4949 /* SoundEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BE21C2B315D37AA70ED45E9 /* SoundEngine.swift */; };
 		78FCEDC8F78B683AB10E6529 /* NotionPoller.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE03E03D1804B0B92C5C2DAD /* NotionPoller.swift */; };
+		79037F3D26B7B2BB7B73B414 /* GrokReplyText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5966269553BE7CC43239A6 /* GrokReplyText.swift */; };
+		808E034A6FC6FBA34B9AACF1 /* TerminalNotchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4729BE7E5B2A9537D7A0D77 /* TerminalNotchView.swift */; };
+		847A83AF92F429A42AE9B8F4 /* NookBoard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CE84B20D715D899B7164BF1 /* NookBoard.swift */; };
 		878924960FC0F2B3524D48AC /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 192844E7299DEED5C2372067 /* AppDelegate.swift */; };
 		8C32A0C3EAF536D3836F61D5 /* GreetingCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C581F7B1A9F14B281B60063E /* GreetingCanvasView.swift */; };
 		8D1C01F283FA7806119A1C85 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C1A7D5CBE2AC084A10C5FF3 /* SettingsView.swift */; };
 		967B525F7D3837F31D740D18 /* ResendPoller.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61B5FDDE03F5F711146937E2 /* ResendPoller.swift */; };
 		9DD56C95ECABDDCE23652D50 /* HookServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79D8DD79C3DD9BBC584B3CB2 /* HookServer.swift */; };
+		A5EE242B1FFE9925EC152F8D /* IOBluetooth.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 89BB3EBD5F4203E9788E7805 /* IOBluetooth.framework */; };
+		ACB26C7F3C88260FC4AB9E7F /* NookBoard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CE84B20D715D899B7164BF1 /* NookBoard.swift */; };
+		AE92D4BC715C235D45372E27 /* NookLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = A17C6A3002D9A97654005CE1 /* NookLayout.swift */; };
 		B3EC9CF3C8BD629C3530E8F1 /* sounds in Resources */ = {isa = PBXBuildFile; fileRef = C066E2B991AA4F56B2724263 /* sounds */; };
 		B605F976F4141435F27CF266 /* IslandRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15A1A8206F73376F4CAF2057 /* IslandRootView.swift */; };
 		C0E18D0F6F5F6D131E6066B8 /* GreetingCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C581F7B1A9F14B281B60063E /* GreetingCanvasView.swift */; };
@@ -58,56 +86,103 @@
 		C940B651C6CA952D99388E04 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 192844E7299DEED5C2372067 /* AppDelegate.swift */; };
 		CA3321C14A11FED94E48B3E3 /* IslandRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15A1A8206F73376F4CAF2057 /* IslandRootView.swift */; };
 		CD8DECA66B9E09C97E469DB9 /* BotCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A29F4C0B02BE91654D02AA0C /* BotCanvasView.swift */; };
+		D2DFA5B4925AED4A5C3A884D /* HudBehavior.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02AA1A233C87F75351A6F10C /* HudBehavior.swift */; };
 		D82E93014C8087AE81511E40 /* IslandTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D3CE3617E9D336DDBA10F7A /* IslandTypes.swift */; };
 		DCAC390FF9EC65B945A15B24 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 506824380E9C80B9BC6DCE72 /* Assets.xcassets */; };
 		DE05D09A32117582AC93A24A /* NotchBuddyApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1BD8F3CAA60CF37640759E1 /* NotchBuddyApp.swift */; };
+		DF6E939F1D44AE71E84E6B01 /* IOBluetooth.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 89BB3EBD5F4203E9788E7805 /* IOBluetooth.framework */; };
 		E4B9986674F4D425826F15A8 /* StripePoller.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EF78999D68D56ADE4CEFBE2 /* StripePoller.swift */; };
 		E776C7D1DE5C62EA8D4BA3E3 /* FileDropView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3232F258523DD8D09B670363 /* FileDropView.swift */; };
 		EB23ED9F1C12EA8B54A76A91 /* ResendPoller.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61B5FDDE03F5F711146937E2 /* ResendPoller.swift */; };
+		EBBE69C03A79A33069C96D44 /* HudBehavior.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02AA1A233C87F75351A6F10C /* HudBehavior.swift */; };
 		ECECA2F225E82B7C951658D7 /* UploadSequenceEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FD65943C32E150F1CD65C31 /* UploadSequenceEngine.swift */; };
 		F06EE0A97CB77096A337AA8B /* sounds in Resources */ = {isa = PBXBuildFile; fileRef = C066E2B991AA4F56B2724263 /* sounds */; };
 		FAD78D74C6906D4EC8AA4101 /* UploadSequenceEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FD65943C32E150F1CD65C31 /* UploadSequenceEngine.swift */; };
 		FBBC4CDE82B5886A83A27D7A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 506824380E9C80B9BC6DCE72 /* Assets.xcassets */; };
 		FEFEF1EBAB0E6CA74A33C10B /* SafeWebURL.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2FDED98F7F6C755A72C97A3 /* SafeWebURL.swift */; };
+		FF6C0BFD78199D901A7D077B /* NookPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = E76F1632ABCE68B9B39283C9 /* NookPreferences.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		02AA1A233C87F75351A6F10C /* HudBehavior.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HudBehavior.swift; sourceTree = "<group>"; };
+		0936B6137F32D78D88E2BB2C /* TerminalBehavior.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalBehavior.swift; sourceTree = "<group>"; };
 		15A1A8206F73376F4CAF2057 /* IslandRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IslandRootView.swift; sourceTree = "<group>"; };
 		192844E7299DEED5C2372067 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		1BE21C2B315D37AA70ED45E9 /* SoundEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoundEngine.swift; sourceTree = "<group>"; };
+		24CDAE765B43579A52AB573B /* TerminalDesk.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalDesk.swift; sourceTree = "<group>"; };
 		2EF78999D68D56ADE4CEFBE2 /* StripePoller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StripePoller.swift; sourceTree = "<group>"; };
 		3104222B3F17BA5E8DEA5277 /* CalcomPoller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalcomPoller.swift; sourceTree = "<group>"; };
 		3232F258523DD8D09B670363 /* FileDropView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDropView.swift; sourceTree = "<group>"; };
 		4DC2A07E42245A8CF3BBD2AB /* CoucouAppStore.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CoucouAppStore.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		4EF96B784133C8903CCE5018 /* IslandMotion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IslandMotion.swift; sourceTree = "<group>"; };
 		506824380E9C80B9BC6DCE72 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		5B5966269553BE7CC43239A6 /* GrokReplyText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GrokReplyText.swift; sourceTree = "<group>"; };
+		5CE84B20D715D899B7164BF1 /* NookBoard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookBoard.swift; sourceTree = "<group>"; };
 		61B5FDDE03F5F711146937E2 /* ResendPoller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResendPoller.swift; sourceTree = "<group>"; };
+		6D5C2B062CED99899D039421 /* HudController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HudController.swift; sourceTree = "<group>"; };
 		6FD65943C32E150F1CD65C31 /* UploadSequenceEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadSequenceEngine.swift; sourceTree = "<group>"; };
 		71718D1B87A39A4879DD2A9D /* VercelPoller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VercelPoller.swift; sourceTree = "<group>"; };
 		78BC1357785CA1B099A33969 /* IslandScreenGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IslandScreenGeometry.swift; sourceTree = "<group>"; };
 		79D8DD79C3DD9BBC584B3CB2 /* HookServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HookServer.swift; sourceTree = "<group>"; };
 		7C1A7D5CBE2AC084A10C5FF3 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		B82D1F88C5E35029D7F16B13 /* SettingsBoard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsBoard.swift; sourceTree = "<group>"; };
+		89BB3EBD5F4203E9788E7805 /* IOBluetooth.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = IOBluetooth.framework; path = System/Library/Frameworks/IOBluetooth.framework; sourceTree = SDKROOT; };
 		8CB8B6E5E9DA6164F979E88F /* GithubPoller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GithubPoller.swift; sourceTree = "<group>"; };
 		8D3CE3617E9D336DDBA10F7A /* IslandTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IslandTypes.swift; sourceTree = "<group>"; };
+		9BFA3095FF2D95B02804A6D9 /* CoucouSettingsShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoucouSettingsShell.swift; sourceTree = "<group>"; };
 		9F6D7015D6A77AA59323C0E7 /* AppLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLog.swift; sourceTree = "<group>"; };
 		A14A61070D293AB4BBA303F7 /* NotchBuddy.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NotchBuddy.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A17C6A3002D9A97654005CE1 /* NookLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookLayout.swift; sourceTree = "<group>"; };
 		A29F4C0B02BE91654D02AA0C /* BotCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BotCanvasView.swift; sourceTree = "<group>"; };
 		A83D5410BD030B243ADDCFF4 /* ClaudeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeService.swift; sourceTree = "<group>"; };
 		B241B043223AFBBFB7418A5E /* UploadCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadCanvasView.swift; sourceTree = "<group>"; };
 		B2FDED98F7F6C755A72C97A3 /* SafeWebURL.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafeWebURL.swift; sourceTree = "<group>"; };
+		B3A0988B263F0BDB4C8B3A0B /* GrokService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GrokService.swift; sourceTree = "<group>"; };
 		B89DA1A0C21AE3535A1760BB /* N8nPoller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = N8nPoller.swift; sourceTree = "<group>"; };
 		BE03E03D1804B0B92C5C2DAD /* NotionPoller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotionPoller.swift; sourceTree = "<group>"; };
 		C066E2B991AA4F56B2724263 /* sounds */ = {isa = PBXFileReference; lastKnownFileType = folder; name = sounds; path = Resources/sounds; sourceTree = SOURCE_ROOT; };
+		C1B27F63FAAD513A199873B8 /* LiveActivityBehavior.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveActivityBehavior.swift; sourceTree = "<group>"; };
 		C2E4F18AA940EFF7E047B9F7 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		C581F7B1A9F14B281B60063E /* GreetingCanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GreetingCanvasView.swift; sourceTree = "<group>"; };
 		D4540F630F8BA04AFFFA3979 /* BotEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BotEngine.swift; sourceTree = "<group>"; };
+		D4729BE7E5B2A9537D7A0D77 /* TerminalNotchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalNotchView.swift; sourceTree = "<group>"; };
 		D710BD7834228045869D0184 /* IslandWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IslandWindowController.swift; sourceTree = "<group>"; };
 		D8212018F09EA1E96FBD63CD /* IslandStateMachine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IslandStateMachine.swift; sourceTree = "<group>"; };
+		E76F1632ABCE68B9B39283C9 /* NookPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookPreferences.swift; sourceTree = "<group>"; };
 		E91B733ADC638E14E9BB6EFA /* WindowContextCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowContextCapture.swift; sourceTree = "<group>"; };
+		EC751AC8FA328503D095A208 /* NookIslandView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookIslandView.swift; sourceTree = "<group>"; };
 		F1BD8F3CAA60CF37640759E1 /* NotchBuddyApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchBuddyApp.swift; sourceTree = "<group>"; };
 		FA02B08886939FF6FE0475DD /* IslandViewContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IslandViewContent.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFrameworksBuildPhase section */
+		37CC26065EDFBD271EB49947 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				DF6E939F1D44AE71E84E6B01 /* IOBluetooth.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EDF3FB42C002EEFF249B6F0E /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A5EE242B1FFE9925EC152F8D /* IOBluetooth.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
 /* Begin PBXGroup section */
+		26040C7D30387F73512D09A0 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				89BB3EBD5F4203E9788E7805 /* IOBluetooth.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		2D4550630644796DA0649B81 /* App */ = {
 			isa = PBXGroup;
 			children = (
@@ -118,24 +193,39 @@
 				D4540F630F8BA04AFFFA3979 /* BotEngine.swift */,
 				3104222B3F17BA5E8DEA5277 /* CalcomPoller.swift */,
 				A83D5410BD030B243ADDCFF4 /* ClaudeService.swift */,
+				9BFA3095FF2D95B02804A6D9 /* CoucouSettingsShell.swift */,
 				3232F258523DD8D09B670363 /* FileDropView.swift */,
 				8CB8B6E5E9DA6164F979E88F /* GithubPoller.swift */,
 				C581F7B1A9F14B281B60063E /* GreetingCanvasView.swift */,
+				5B5966269553BE7CC43239A6 /* GrokReplyText.swift */,
+				B3A0988B263F0BDB4C8B3A0B /* GrokService.swift */,
 				79D8DD79C3DD9BBC584B3CB2 /* HookServer.swift */,
+				02AA1A233C87F75351A6F10C /* HudBehavior.swift */,
+				6D5C2B062CED99899D039421 /* HudController.swift */,
+				4EF96B784133C8903CCE5018 /* IslandMotion.swift */,
 				15A1A8206F73376F4CAF2057 /* IslandRootView.swift */,
 				78BC1357785CA1B099A33969 /* IslandScreenGeometry.swift */,
 				D8212018F09EA1E96FBD63CD /* IslandStateMachine.swift */,
 				8D3CE3617E9D336DDBA10F7A /* IslandTypes.swift */,
 				FA02B08886939FF6FE0475DD /* IslandViewContent.swift */,
 				D710BD7834228045869D0184 /* IslandWindowController.swift */,
+				C1B27F63FAAD513A199873B8 /* LiveActivityBehavior.swift */,
 				B89DA1A0C21AE3535A1760BB /* N8nPoller.swift */,
+				5CE84B20D715D899B7164BF1 /* NookBoard.swift */,
+				EC751AC8FA328503D095A208 /* NookIslandView.swift */,
+				A17C6A3002D9A97654005CE1 /* NookLayout.swift */,
+				E76F1632ABCE68B9B39283C9 /* NookPreferences.swift */,
 				F1BD8F3CAA60CF37640759E1 /* NotchBuddyApp.swift */,
 				BE03E03D1804B0B92C5C2DAD /* NotionPoller.swift */,
 				61B5FDDE03F5F711146937E2 /* ResendPoller.swift */,
 				B2FDED98F7F6C755A72C97A3 /* SafeWebURL.swift */,
+				B82D1F88C5E35029D7F16B13 /* SettingsBoard.swift */,
 				7C1A7D5CBE2AC084A10C5FF3 /* SettingsView.swift */,
 				1BE21C2B315D37AA70ED45E9 /* SoundEngine.swift */,
 				2EF78999D68D56ADE4CEFBE2 /* StripePoller.swift */,
+				0936B6137F32D78D88E2BB2C /* TerminalBehavior.swift */,
+				24CDAE765B43579A52AB573B /* TerminalDesk.swift */,
+				D4729BE7E5B2A9537D7A0D77 /* TerminalNotchView.swift */,
 				B241B043223AFBBFB7418A5E /* UploadCanvasView.swift */,
 				6FD65943C32E150F1CD65C31 /* UploadSequenceEngine.swift */,
 				71718D1B87A39A4879DD2A9D /* VercelPoller.swift */,
@@ -167,6 +257,7 @@
 				506824380E9C80B9BC6DCE72 /* Assets.xcassets */,
 				D3593DF62D69E62DA5121807 /* Resources */,
 				B382DF6D17081F63DA1CC08B /* Sources */,
+				26040C7D30387F73512D09A0 /* Frameworks */,
 				6CF11AAA7898712CF6DB364A /* Products */,
 			);
 			sourceTree = "<group>";
@@ -188,6 +279,7 @@
 			buildPhases = (
 				002591692F471861383A29CD /* Sources */,
 				A0E1A749D68BF03D3FDE4473 /* Resources */,
+				37CC26065EDFBD271EB49947 /* Frameworks */,
 			);
 			buildRules = (
 			);
@@ -206,6 +298,7 @@
 			buildPhases = (
 				760473CA0E9C38B61B761B8C /* Sources */,
 				4AFCA0709B0C077E65F471EB /* Resources */,
+				EDF3FB42C002EEFF249B6F0E /* Frameworks */,
 			);
 			buildRules = (
 			);
@@ -289,24 +382,39 @@
 				C24D863967D8D32D828ED4B1 /* BotEngine.swift in Sources */,
 				4F1E0B3C838DA3CD6F864BC0 /* CalcomPoller.swift in Sources */,
 				2DEB459FBD0BA3CEAAA5FDE9 /* ClaudeService.swift in Sources */,
+				60D225E2376567D4DAB81006 /* CoucouSettingsShell.swift in Sources */,
 				E776C7D1DE5C62EA8D4BA3E3 /* FileDropView.swift in Sources */,
 				C808B654C84D9F71DBF8493A /* GithubPoller.swift in Sources */,
 				8C32A0C3EAF536D3836F61D5 /* GreetingCanvasView.swift in Sources */,
+				44DE48C55E4286F0D52F02F1 /* GrokReplyText.swift in Sources */,
+				1B2258442AB7BB6BF6EB3324 /* GrokService.swift in Sources */,
 				2C798C3837A63B9BB561A1A0 /* HookServer.swift in Sources */,
+				D2DFA5B4925AED4A5C3A884D /* HudBehavior.swift in Sources */,
+				4B1CA4F21E167AD829A98A84 /* HudController.swift in Sources */,
+				6D6517EFDC1DB9E337528022 /* IslandMotion.swift in Sources */,
 				CA3321C14A11FED94E48B3E3 /* IslandRootView.swift in Sources */,
 				186AB8904029767DAA5277CF /* IslandScreenGeometry.swift in Sources */,
 				5B9A00AFB0837731FA678E4E /* IslandStateMachine.swift in Sources */,
 				3F19756A396F125EC711247F /* IslandTypes.swift in Sources */,
 				065FCE817315454DE3F85F25 /* IslandViewContent.swift in Sources */,
 				091EC3B2F1060D7EE1317E4E /* IslandWindowController.swift in Sources */,
+				63D39E4713594676F1EF15E1 /* LiveActivityBehavior.swift in Sources */,
 				0A267EE2955C7AD8E02A296C /* N8nPoller.swift in Sources */,
+				ACB26C7F3C88260FC4AB9E7F /* NookBoard.swift in Sources */,
+				45AD2B8E517C823E34FB0C21 /* NookIslandView.swift in Sources */,
+				AE92D4BC715C235D45372E27 /* NookLayout.swift in Sources */,
+				31833C7C2FB6B18CAD361102 /* NookPreferences.swift in Sources */,
 				06BF5FD95E03010CAFDBF2D0 /* NotchBuddyApp.swift in Sources */,
 				2F36E3C6C073E968A682AFA4 /* NotionPoller.swift in Sources */,
 				967B525F7D3837F31D740D18 /* ResendPoller.swift in Sources */,
 				6FC65C190ED614C664C9BC17 /* SafeWebURL.swift in Sources */,
+				A91C0E77B4D24F18C6E05A02 /* SettingsBoard.swift in Sources */,
 				56BE8C733F10A030A638FB60 /* SettingsView.swift in Sources */,
 				60E361FFE84C387E5E3ED1AA /* SoundEngine.swift in Sources */,
 				1558BB00C530B721172F6E65 /* StripePoller.swift in Sources */,
+				1DEE6CAB1CB28282E17A3731 /* TerminalBehavior.swift in Sources */,
+				6D85613133BF346F26D32B17 /* TerminalDesk.swift in Sources */,
+				38F5F8ED3129DC09D7C32BDE /* TerminalNotchView.swift in Sources */,
 				62C4EE3F74DAA59764729E62 /* UploadCanvasView.swift in Sources */,
 				FAD78D74C6906D4EC8AA4101 /* UploadSequenceEngine.swift in Sources */,
 				118FC4AE0AC74D84B4A134D8 /* VercelPoller.swift in Sources */,
@@ -325,24 +433,39 @@
 				0E9CE475EC53C67DAB00F8E5 /* BotEngine.swift in Sources */,
 				1969590AFEE6CB21404346F1 /* CalcomPoller.swift in Sources */,
 				0329E76BA4A8FEEA8A6D76E7 /* ClaudeService.swift in Sources */,
+				06137EFCF7BD5864C0C846CA /* CoucouSettingsShell.swift in Sources */,
 				2132477000FD77F7EB234DAA /* FileDropView.swift in Sources */,
 				C18227D148D99FE6EE3CC51A /* GithubPoller.swift in Sources */,
 				C0E18D0F6F5F6D131E6066B8 /* GreetingCanvasView.swift in Sources */,
+				79037F3D26B7B2BB7B73B414 /* GrokReplyText.swift in Sources */,
+				68B57FDDE2D0EDE39FB221AE /* GrokService.swift in Sources */,
 				9DD56C95ECABDDCE23652D50 /* HookServer.swift in Sources */,
+				EBBE69C03A79A33069C96D44 /* HudBehavior.swift in Sources */,
+				0BA6F826C45BED888EC7F303 /* HudController.swift in Sources */,
+				41DBE926326DE1FDEC9CFEFF /* IslandMotion.swift in Sources */,
 				B605F976F4141435F27CF266 /* IslandRootView.swift in Sources */,
 				0D68A4C4E3422487DB7B2262 /* IslandScreenGeometry.swift in Sources */,
 				3756B7E1A55D9CEC8C4D34A4 /* IslandStateMachine.swift in Sources */,
 				D82E93014C8087AE81511E40 /* IslandTypes.swift in Sources */,
 				68A950E3C23FD612639D9776 /* IslandViewContent.swift in Sources */,
 				C61DDE2EC5FDDB39E4AA3B34 /* IslandWindowController.swift in Sources */,
+				6F18AAC6A631C37FDB516327 /* LiveActivityBehavior.swift in Sources */,
 				160EDB9D06275E2607DA5151 /* N8nPoller.swift in Sources */,
+				847A83AF92F429A42AE9B8F4 /* NookBoard.swift in Sources */,
+				5EEBCCEA7130C48AB2F7E1FA /* NookIslandView.swift in Sources */,
+				18B5B4F4AB75861C00466E27 /* NookLayout.swift in Sources */,
+				FF6C0BFD78199D901A7D077B /* NookPreferences.swift in Sources */,
 				DE05D09A32117582AC93A24A /* NotchBuddyApp.swift in Sources */,
 				78FCEDC8F78B683AB10E6529 /* NotionPoller.swift in Sources */,
 				EB23ED9F1C12EA8B54A76A91 /* ResendPoller.swift in Sources */,
 				FEFEF1EBAB0E6CA74A33C10B /* SafeWebURL.swift in Sources */,
+				C03D2A99D6F46130E8A27C24 /* SettingsBoard.swift in Sources */,
 				8D1C01F283FA7806119A1C85 /* SettingsView.swift in Sources */,
 				78B3C6814431B2DD9D1F4949 /* SoundEngine.swift in Sources */,
 				E4B9986674F4D425826F15A8 /* StripePoller.swift in Sources */,
+				32EE53C97043D3CD25ED357E /* TerminalBehavior.swift in Sources */,
+				174B251BEECB7CD1ADE4C9C2 /* TerminalDesk.swift in Sources */,
+				808E034A6FC6FBA34B9AACF1 /* TerminalNotchView.swift in Sources */,
 				4117E7C8AA231AAE36E7509D /* UploadCanvasView.swift in Sources */,
 				ECECA2F225E82B7C951658D7 /* UploadSequenceEngine.swift in Sources */,
 				0E83C1DD4D20E7FB7A904450 /* VercelPoller.swift in Sources */,

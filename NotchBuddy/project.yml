@@ -46,6 +46,8 @@ targets:
   NotchBuddy:
     type: application
     platform: macOS
+    dependencies:
+      - sdk: IOBluetooth.framework
     sources:
       - path: Sources
         type: group
@@ -66,8 +68,14 @@ targets:
         LSUIElement: YES
         NSHighResolutionCapable: YES
         NSSupportsAutomaticGraphicsSwitching: YES
-        NSAppleEventsUsageDescription: "Pour sauter au terminal et envoyer des mails."
-        NSAccessibilityUsageDescription: "Pour lire le titre de la fenêtre active et l'attacher comme contexte."
+        NSAppleEventsUsageDescription: "Coucou asks Chrome or Safari to float the playing video, asks Terminal to run a line, and asks Logic Pro to split a song into stems."
+        NSAppleMusicUsageDescription: "Coucou shows the song or video that is playing, including from Chrome, in the notch."
+        NSAccessibilityUsageDescription: "Coucou reads the front window for the notch, and uses the volume and brightness keys so those changes can show in the notch."
+        NSCalendarsFullAccessUsageDescription: "Coucou lists your calendars so you can choose which events appear in the notch."
+        NSCalendarsUsageDescription: "Coucou lists your calendars so you can choose which events appear in the notch."
+        NSCameraUsageDescription: "Coucou shows your front camera in the Mirror circle."
+        NSScreenCaptureUsageDescription: "Coucou shows the playing video in a floating picture on the desktop you are already using."
+        NSBluetoothAlwaysUsageDescription: "Coucou shows a connected Bluetooth device in the notch."
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: fr.louisraille.NotchBuddy
@@ -80,6 +88,8 @@ targets:
   CoucouAppStore:
     type: application
     platform: macOS
+    dependencies:
+      - sdk: IOBluetooth.framework
     sources:
       - path: Sources
         type: group
@@ -100,6 +110,10 @@ targets:
         LSUIElement: YES
         NSHighResolutionCapable: YES
         NSSupportsAutomaticGraphicsSwitching: YES
+        NSCalendarsFullAccessUsageDescription: "Coucou lists your calendars so you can choose which events appear in the notch."
+        NSCalendarsUsageDescription: "Coucou lists your calendars so you can choose which events appear in the notch."
+        NSCameraUsageDescription: "Coucou shows your front camera in the Mirror circle."
+        NSBluetoothAlwaysUsageDescription: "Coucou shows a connected Bluetooth device in the notch."
         LSApplicationCategoryType: public.app-category.developer-tools
         ITSAppUsesNonExemptEncryption: NO
     settings:

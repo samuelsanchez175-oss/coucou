@@ -1052,8 +1052,14 @@ final class BotEngine: ObservableObject {
 
     private func drawBody(ctx: inout GraphicsContext, path: Path, R: CGFloat, rx: CGFloat, ry: CGFloat) {
         if let bc = bodyColor {
-            // Mini bots: flat solid fill — no gradient, no reflection, no highlight
+            // Mini bots keep their slot color. The terminal state tints that color
+            // so a working blob and a waiting blob do not look the same.
             ctx.fill(path, with: .color(Color(cgColor: bc)))
+            let effectiveTint = tint * (1 - morph)
+            if effectiveTint > 0.01 {
+                let tc = colorFromTuple(col)
+                ctx.fill(path, with: .color(tc.opacity(Double(0.62 * effectiveTint))))
+            }
         } else {
             // Main bot: linear gradient body
             let c0 = cgColorToTuple(MochiConst.baseTop)
@@ -1300,11 +1306,10 @@ final class BotEngine: ObservableObject {
             var inner = Path()
             inner.addEllipse(in: CGRect(x: -R*0.23, y: -R*0.23, width: R*0.46, height: R*0.46))
             ctx.fill(inner, with: .color(Color(cgColor: col)))
-            if !isMini {
-                let text = badge == .bang(col) ? "!" : "?"
-                ctx.draw(Text(text).font(.system(size: R*0.32, weight: .black)).foregroundColor(.white),
-                         at: CGPoint(x: 0, y: R*0.02))
-            }
+            let text: String
+            if case .question = badge { text = "?" } else { text = "!" }
+            ctx.draw(Text(text).font(.system(size: R * (isMini ? 0.42 : 0.32), weight: .black)).foregroundColor(.white),
+                     at: CGPoint(x: 0, y: R*0.02))
 
         case .dot(let col):
             var outer = Path()
