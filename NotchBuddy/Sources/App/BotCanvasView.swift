@@ -159,6 +159,7 @@ struct MiniBotCanvasView: View {
             let e = BotEngine()
             e.isMini = true
             e.bodyColor = cgColorFromHex(task.color)
+            e.holdSlotColor = task.holdSlotColor
             return e
         }())
     }

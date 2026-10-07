@@ -28,6 +28,8 @@ struct TerminalSlot: Identifiable, Equatable {
     var color: String
     var folder: String
     var windowID: Int?
+    /// tty of the selected tab. This stays put when Terminal replaces the window id.
+    var tty: String = ""
 }
 
 private struct StoredTerminal: Codable {
@@ -35,6 +37,7 @@ private struct StoredTerminal: Codable {
     var name: String
     var folder: String
     var windowID: Int?
+    var tty: String?
 }
 
 /// Four fixed Terminal.app sessions, one per notch color.
@@ -71,6 +74,16 @@ final class TerminalDesk: ObservableObject {
     private var didTile = false
     /// Frames from the last listing, so a press can focus the window already in that corner.
     private var rememberedCorners: [TerminalBehavior.CornerWindow] = []
+    /// Sessions from the last listing that Terminal actually returned.
+    private var liveSessions: [TerminalBehavior.LiveSession] = []
+    private var liveListIsCurrent = false
+    /// Terminals already open when Coucou started. Nil until that first look settles.
+    private var startupSessions: [TerminalBehavior.StartupWindow]?
+    private var launchWatch = Date()
+    /// A place is moving tabs. The window id changes before the new one is saved.
+    private var placeInFlight = 0
+    /// Bumps when a place starts, so a listing taken during that move is not trusted to divorce a blob.
+    private var placeGeneration = 0
     private let defaults = UserDefaults.standard
     private let storeKey = "nook.terminals"
 
@@ -84,7 +97,8 @@ final class TerminalDesk: ObservableObject {
                     ? prior!.name : item.name,
                 color: item.color,
                 folder: prior?.folder ?? "",
-                windowID: prior?.windowID
+                windowID: prior?.windowID,
+                tty: prior?.tty ?? ""
             )
         }
         for slot in slots { faces[slot.id] = .idle }
@@ -154,6 +168,12 @@ final class TerminalDesk: ObservableObject {
             }
         }
         slots[index].windowID = windowID
+        if let windowID, let session = liveSessions.first(where: { $0.id == windowID }), !session.tty.isEmpty {
+            slots[index].tty = session.tty
+        }
+        if windowID == nil {
+            slots[index].tty = ""
+        }
         save()
     }
 
@@ -266,11 +286,21 @@ final class TerminalDesk: ObservableObject {
         noteDraftChanged()
     }
 
+    /// The window id to focus. A new id with the saved tty is the same terminal.
+    private func resolvedWindowID(_ slot: TerminalSlot) -> Int? {
+        TerminalBehavior.marriedWindow(
+            savedID: slot.windowID,
+            savedTTY: slot.tty,
+            live: liveSessions,
+            listed: liveListIsCurrent
+        ).windowID
+    }
+
     func openOrFocus(_ id: String) {
         select(id)
         guard let slot = slots.first(where: { $0.id == id }) else { return }
         let folder = resolvedFolder(slot)
-        var windowID = slot.windowID
+        var windowID = resolvedWindowID(slot)
         if windowID == nil, let quadrant = cornerFrames()[id] {
             let taken = Set(slots.compactMap(\.windowID))
             if let adopted = TerminalBehavior.windowInCorner(quadrant: quadrant, windows: rememberedCorners, taken: taken) {
@@ -286,6 +316,7 @@ final class TerminalDesk: ObservableObject {
         }
         didTile = true
         let focusID = windowID
+        beginPlace()
         Task {
             let tiled = await Task.detached { () -> (TerminalBridge.Outcome, [TerminalBridge.PlacedWindow]) in
                 var outcome = TerminalBridge.openOrFocus(windowID: focusID, folder: folder, bounds: clicked)
@@ -301,6 +332,7 @@ final class TerminalDesk: ObservableObject {
             }.value
             apply(id, tiled.0)
             notePlaced(tiled.1)
+            endPlace()
         }
     }
 
@@ -328,17 +360,19 @@ final class TerminalDesk: ObservableObject {
         select(id)
         cancelAsk()
         let folder = resolvedFolder(slot)
-        let windowID = slot.windowID
+        let windowID = resolvedWindowID(slot)
         let layout = frames(including: id)
         let bounds = layout[id] ?? TerminalBehavior.TerminalBounds(left: 0, top: 25, right: 800, bottom: 500)
         let hadWindow = windowID != nil
         let queries = files.map { TerminalBehavior.attachmentQuery(path: $0.path, isDirectory: $0.directory) }
         let note = TerminalBehavior.attachmentNote(names: files.map(\.name))
         notes[id] = note
+        beginPlace()
         Task {
             let outcome = await Task.detached {
                 TerminalBridge.attach(queries, windowID: windowID, folder: folder, bounds: bounds)
             }.value
+            endPlace()
             apply(id, outcome)
             if !hadWindow, outcome.windowID != nil {
                 didTile = true
@@ -360,15 +394,17 @@ final class TerminalDesk: ObservableObject {
         let text = draft
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         let folder = resolvedFolder(slot)
-        let windowID = slot.windowID
+        let windowID = resolvedWindowID(slot)
         let id = slot.id
         let layout = frames(including: id)
         let bounds = layout[id] ?? TerminalBehavior.TerminalBounds(left: 0, top: 25, right: 800, bottom: 500)
         let hadWindow = windowID != nil
+        beginPlace()
         Task {
             let outcome = await Task.detached {
                 TerminalBridge.send(text, windowID: windowID, folder: folder, bounds: bounds)
             }.value
+            endPlace()
             apply(id, outcome)
             if !hadWindow, outcome.windowID != nil {
                 didTile = true
@@ -387,47 +423,129 @@ final class TerminalDesk: ObservableObject {
 
     // MARK: - Private
 
+    private func beginPlace() {
+        placeGeneration += 1
+        placeInFlight += 1
+    }
+
+    private func endPlace() {
+        placeInFlight = max(0, placeInFlight - 1)
+    }
+
     private func tick() async {
         let ids = slots.map(\.windowID)
+        let readingGeneration = placeGeneration
         let snapshot = await Task.detached {
             TerminalBridge.snapshot(windowIDs: ids)
         }.value
+        let placeMoved = placeInFlight > 0 || placeGeneration != readingGeneration
         openWindows = snapshot.windows.map { ($0.id, $0.title) }
-        let liveIDs = snapshot.windows.map(\.id)
+        if snapshot.listed {
+            liveSessions = snapshot.windows.map { TerminalBehavior.LiveSession(id: $0.id, tty: $0.tty) }
+            liveListIsCurrent = true
+            if startupSessions == nil {
+                let aged = Date().timeIntervalSince(launchWatch) >= TerminalBehavior.startupGrace
+                if !snapshot.windows.isEmpty || aged {
+                    startupSessions = snapshot.windows.map {
+                        TerminalBehavior.StartupWindow(id: $0.id, tty: $0.tty)
+                    }
+                }
+            }
+        }
+        let sessions = liveSessions
         let corners = cornerWindows(in: snapshot)
         let quadrants = cornerFrames()
         var nextTitles: [String: String] = [:]
         var closedOne = false
+        var resolved: [(windowID: Int?, tty: String, ended: Bool, originalID: Int?)] = []
+        var seenIDs: [Int?] = slots.map(\.windowID)
         for (index, slot) in slots.enumerated() {
-            if slots[index].windowID == nil, snapshot.listed, let quadrant = quadrants[slot.id] {
-                let taken = Set(slots.compactMap(\.windowID))
-                if let adopted = TerminalBehavior.windowInCorner(quadrant: quadrant, windows: corners, taken: taken) {
-                    slots[index].windowID = adopted
-                    save()
-                }
-            }
-            let link = TerminalBehavior.marriage(
-                windowID: slots[index].windowID,
-                liveWindowIDs: liveIDs,
+            let originalID = slots[index].windowID
+            let link = TerminalBehavior.marriedWindow(
+                savedID: originalID,
+                savedTTY: slots[index].tty,
+                live: sessions,
                 listed: snapshot.listed
             )
-            if link.terminated {
-                if slots[index].windowID != nil {
-                    slots[index].windowID = nil
-                    save()
+            var windowID = link.windowID
+            var tty = slots[index].tty
+            var ended = link.terminated
+            if ended && placeMoved {
+                ended = false
+                windowID = originalID
+            }
+            if windowID == nil, snapshot.listed, let quadrant = quadrants[slot.id] {
+                let taken = Set(seenIDs.enumerated().compactMap { offset, item in
+                    offset == index ? nil : item
+                })
+                if let adopted = TerminalBehavior.windowInCorner(quadrant: quadrant, windows: corners, taken: taken) {
+                    windowID = adopted
+                    ended = false
+                    if let found = snapshot.windows.first(where: { $0.id == adopted }), !found.tty.isEmpty {
+                        tty = found.tty
+                    }
+                }
+            }
+            seenIDs[index] = windowID
+            resolved.append((windowID, tty, ended, originalID))
+        }
+        if snapshot.listed, let startup = startupSessions {
+            let picture = resolved.enumerated().map { index, row in
+                TerminalBehavior.ClaimSlot(
+                    id: slots[index].id,
+                    windowID: row.windowID,
+                    tty: row.windowID == nil ? "" : row.tty
+                )
+            }
+            let freeIDs = Set(resolved.enumerated().compactMap { index, row in
+                row.windowID == nil ? slots[index].id : nil
+            })
+            let claimed = TerminalBehavior.claimStartupWindows(
+                slots: picture,
+                open: snapshot.windows.map {
+                    TerminalBehavior.ListedWindow(id: $0.id, title: $0.title, bounds: $0.bounds, tty: $0.tty)
+                },
+                startup: startup,
+                freeIDs: freeIDs
+            )
+            for index in resolved.indices where resolved[index].windowID == nil {
+                if let adopted = claimed[index].windowID {
+                    resolved[index].windowID = adopted
+                    resolved[index].ended = false
+                    let claimedTTY = claimed[index].tty.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !claimedTTY.isEmpty { resolved[index].tty = claimedTTY }
+                }
+            }
+        }
+        for (index, row) in resolved.enumerated() {
+            let slot = slots[index]
+            var windowID = row.windowID
+            var tty = row.tty
+            var ended = row.ended
+            let originalID = row.originalID
+            if ended {
+                if originalID != nil {
                     closedOne = true
                 }
+                windowID = nil
+                tty = ""
                 faces[slot.id] = .idle
-                continue
+            } else if let windowID, let found = snapshot.windows.first(where: { $0.id == windowID }), !found.tty.isEmpty {
+                tty = found.tty
             }
-            guard let windowID = link.windowID,
-                  let found = snapshot.windows.first(where: { $0.id == windowID }) else {
-                if slot.windowID == nil { faces[slot.id] = .idle }
+            if slots[index].windowID != windowID || slots[index].tty != tty {
+                slots[index].windowID = windowID
+                slots[index].tty = tty
+                save()
+            }
+            guard !ended, let windowID, let found = snapshot.windows.first(where: { $0.id == windowID }) else {
+                if slots[index].windowID == nil { faces[slot.id] = .idle }
                 continue
             }
             let title = TerminalBehavior.adoptedName(windowTitle: found.title, fallback: slot.name)
             nextTitles[slot.id] = title
-            let raw = index < snapshot.tails.count ? snapshot.tails[index] : ""
+            var raw = index < snapshot.tails.count ? snapshot.tails[index] : ""
+            if windowID != originalID, raw == "missing" { raw = "" }
             let read = TerminalRead.classify(title: title, contents: raw)
             faces[slot.id] = read.face
             if read.grokMissing {
@@ -481,6 +599,7 @@ final class TerminalDesk: ObservableObject {
 
     /// Windows whose frames came back with the listing. Remembers them for the next press.
     private func cornerWindows(in snapshot: TerminalBridge.Snapshot) -> [TerminalBehavior.CornerWindow] {
+        guard snapshot.listed else { return rememberedCorners }
         let corners = snapshot.windows.compactMap { window -> TerminalBehavior.CornerWindow? in
             guard let bounds = window.bounds else { return nil }
             return TerminalBehavior.CornerWindow(id: window.id, bounds: bounds)
@@ -519,11 +638,13 @@ final class TerminalDesk: ObservableObject {
             return (wid, frame)
         }
         guard !batch.isEmpty else { return }
+        beginPlace()
         Task {
             let placed = await Task.detached {
                 TerminalBridge.placeMany(batch, focus: focus)
             }.value
             notePlaced(placed)
+            endPlace()
         }
     }
 
@@ -575,7 +696,7 @@ final class TerminalDesk: ObservableObject {
 
     private func save() {
         let stored = slots.map {
-            StoredTerminal(id: $0.id, name: $0.name, folder: $0.folder, windowID: $0.windowID)
+            StoredTerminal(id: $0.id, name: $0.name, folder: $0.folder, windowID: $0.windowID, tty: $0.tty.isEmpty ? nil : $0.tty)
         }
         if let data = try? JSONEncoder().encode(stored) {
             defaults.set(data, forKey: storeKey)
@@ -627,7 +748,7 @@ enum TerminalBridge {
     }
 
     struct Snapshot: Sendable {
-        var windows: [(id: Int, title: String, bounds: TerminalBehavior.TerminalBounds?)]
+        var windows: [(id: Int, title: String, bounds: TerminalBehavior.TerminalBounds?, tty: String)]
         var tails: [String]
         /// False when Terminal did not answer. An empty list while Terminal is running is still true.
         var listed: Bool
@@ -645,23 +766,41 @@ enum TerminalBridge {
           tell application "Terminal"
             repeat with w in windows
               try
-                set frameBox to bounds of w
-                set end of windowLines to ((id of w) as text) & field & (item 1 of frameBox as text) & field & (item 2 of frameBox as text) & field & (item 3 of frameBox as text) & field & (item 4 of frameBox as text) & field & (name of w)
-              on error
-                set end of windowLines to ((id of w) as text) & field & (name of w)
+                set widText to (id of w) as text
+                if widText is not "" then
+                  set ttyName to ""
+                  try
+                    set ttyName to tty of selected tab of w
+                  end try
+                  set leftEdge to ""
+                  set topEdge to ""
+                  set rightEdge to ""
+                  set bottomEdge to ""
+                  try
+                    set frameBox to bounds of w
+                    set leftEdge to item 1 of frameBox as text
+                    set topEdge to item 2 of frameBox as text
+                    set rightEdge to item 3 of frameBox as text
+                    set bottomEdge to item 4 of frameBox as text
+                  end try
+                  set wname to "Terminal"
+                  try
+                    set wname to name of w
+                  end try
+                  set end of windowLines to widText & field & leftEdge & field & topEdge & field & rightEdge & field & bottomEdge & field & ttyName & field & wname
+                end if
               end try
             end repeat
             repeat with widText in argv
               if widText is "" then
                 set end of tails to ""
               else
+                set blob to ""
                 try
                   set blob to contents of selected tab of window id (widText as integer)
                   if (count of blob) > 500 then set blob to text -500 thru -1 of blob
-                  set end of tails to blob
-                on error
-                  set end of tails to "missing"
                 end try
+                set end of tails to blob
               end if
             end repeat
           end tell
@@ -677,7 +816,7 @@ enum TerminalBridge {
         }
         let parsed = TerminalBehavior.parseSnapshot(text, slotCount: windowIDs.count)
         return Snapshot(
-            windows: parsed.windows.map { ($0.id, $0.title, $0.bounds) },
+            windows: parsed.windows.map { ($0.id, $0.title, $0.bounds, $0.tty) },
             tails: parsed.tails,
             listed: parsed.listed
         )

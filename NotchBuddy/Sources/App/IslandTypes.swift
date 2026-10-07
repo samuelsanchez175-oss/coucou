@@ -58,6 +58,8 @@ struct AgentTask: Identifiable, Equatable {
     var miniEye: EyeShape? = nil
     var pillBadge: PillBadge? = nil  // alert badge shown on pill when not focused
     var sessionCwd: String?  = nil  // last known working directory (Claude Code sessions)
+    /// Terminal blobs keep their slot color. Other minis still take the state tint.
+    var holdSlotColor: Bool = false
 }
 
 enum AgentSource: Equatable {

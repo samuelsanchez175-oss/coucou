@@ -173,12 +173,100 @@ enum TerminalBehavior {
         var title: String
         /// Present when the listing included the window frame. Nil for an older id-and-title line.
         var bounds: TerminalBounds? = nil
+        /// tty of the selected tab. Empty when the listing did not include one.
+        var tty: String = ""
     }
 
     /// A Terminal window Coucou can recognize by the corner it was tiled into.
     struct CornerWindow: Equatable {
         var id: Int
         var bounds: TerminalBounds
+    }
+
+    /// One live Terminal session. The tty stays when Terminal gives the window a new id.
+    struct LiveSession: Equatable, Sendable {
+        var id: Int
+        var tty: String
+    }
+
+    /// A terminal that was already open when Coucou started looking.
+    struct StartupWindow: Equatable, Sendable {
+        var id: Int
+        var tty: String
+    }
+
+    /// One blob and the terminal it currently owns.
+    struct ClaimSlot: Equatable {
+        var id: String
+        var windowID: Int?
+        var tty: String
+    }
+
+    /// How long Coucou keeps looking for terminals that were already open, in seconds.
+    static let startupGrace: TimeInterval = 8
+
+    /// The window this blob is married to.
+    /// A failed listing keeps the saved id. The same tty with a new id is the same terminal.
+    /// A saved id that is gone, with no single matching tty, is terminated.
+    static func marriedWindow(savedID: Int?, savedTTY: String, live: [LiveSession], listed: Bool) -> Marriage {
+        guard listed else {
+            return Marriage(windowID: savedID, terminated: false)
+        }
+        if let savedID, live.contains(where: { $0.id == savedID }) {
+            return Marriage(windowID: savedID, terminated: false)
+        }
+        let tty = savedTTY.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !tty.isEmpty {
+            let hits = live.filter { $0.tty == tty }
+            if hits.count == 1 {
+                return Marriage(windowID: hits[0].id, terminated: false)
+            }
+        }
+        if savedID != nil {
+            return Marriage(windowID: nil, terminated: true)
+        }
+        return Marriage(windowID: nil, terminated: false)
+    }
+
+    /// The first already-open terminal that no blob owns.
+    /// A window that was not open at launch is left alone. The same tty with a new id still counts.
+    static func startupWindow(
+        open: [ListedWindow],
+        startup: [StartupWindow],
+        takenIDs: Set<Int>,
+        takenTTYs: Set<String>
+    ) -> ListedWindow? {
+        let startupIDs = Set(startup.map(\.id))
+        let startupTTYs = Set(startup.map { $0.tty.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })
+        return open.first { window in
+            if takenIDs.contains(window.id) { return false }
+            let tty = window.tty.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !tty.isEmpty, takenTTYs.contains(tty) { return false }
+            let knownID = startupIDs.contains(window.id)
+            let knownTTY = !tty.isEmpty && startupTTYs.contains(tty)
+            return knownID || knownTTY
+        }
+    }
+
+    /// Free blobs take terminals that were already open. An assigned blob keeps its window.
+    static func claimStartupWindows(
+        slots: [ClaimSlot],
+        open: [ListedWindow],
+        startup: [StartupWindow],
+        freeIDs: Set<String>
+    ) -> [ClaimSlot] {
+        var slots = slots
+        for index in slots.indices {
+            guard freeIDs.contains(slots[index].id), slots[index].windowID == nil else { continue }
+            let ownTTY = slots[index].tty.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard ownTTY.isEmpty else { continue }
+            let takenIDs = Set(slots.compactMap(\.windowID))
+            let takenTTYs = Set(slots.map { $0.tty.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })
+            guard let found = startupWindow(open: open, startup: startup, takenIDs: takenIDs, takenTTYs: takenTTYs) else { continue }
+            slots[index].windowID = found.id
+            if !found.tty.isEmpty { slots[index].tty = found.tty }
+        }
+        return slots
     }
 
     /// How far a tiled window may sit from the corner Coucou gave it, in points.
@@ -202,15 +290,23 @@ enum TerminalBehavior {
         let listing = parts.first ?? ""
         for line in listing.split(whereSeparator: \.isNewline) {
             let bits = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
-            guard let id = Int(bits.first ?? "") else {
+            guard let id = wholeNumber(bits.first ?? "") else {
                 unread += 1
                 continue
             }
             let title: String
             var bounds: TerminalBounds?
-            if bits.count >= 6,
-               let left = Int(bits[1]), let top = Int(bits[2]),
-               let right = Int(bits[3]), let bottom = Int(bits[4]) {
+            var tty = ""
+            if bits.count >= 7 {
+                if let left = wholeNumber(bits[1]), let top = wholeNumber(bits[2]),
+                   let right = wholeNumber(bits[3]), let bottom = wholeNumber(bits[4]) {
+                    bounds = TerminalBounds(left: left, top: top, right: right, bottom: bottom)
+                }
+                tty = bits[5]
+                title = bits.dropFirst(6).joined(separator: "\t")
+            } else if bits.count >= 6,
+                      let left = wholeNumber(bits[1]), let top = wholeNumber(bits[2]),
+                      let right = wholeNumber(bits[3]), let bottom = wholeNumber(bits[4]) {
                 bounds = TerminalBounds(left: left, top: top, right: right, bottom: bottom)
                 title = bits.dropFirst(5).joined(separator: "\t")
             } else if bits.count > 1 {
@@ -219,7 +315,12 @@ enum TerminalBehavior {
                 unread += 1
                 continue
             }
-            windows.append(ListedWindow(id: id, title: title.isEmpty ? "Terminal" : title, bounds: bounds))
+            windows.append(ListedWindow(
+                id: id,
+                title: title.isEmpty ? "Terminal" : title,
+                bounds: bounds,
+                tty: tty
+            ))
         }
         var tails = parts.dropFirst().map { String($0) }
         if tails.count < slotCount {
@@ -510,13 +611,29 @@ enum TerminalBehavior {
         return trimmed.isEmpty ? fallback : trimmed
     }
 
-    /// Two or three whole words from the terminal's own title. The line stops
-    /// before it would be wider than the blob column, so the name is not cut off.
+    /// The topic noun in the terminal's title. A blank title keeps the fallback.
     static func shortTitle(_ windowTitle: String, fallback: String) -> String {
         let words = titleWords(windowTitle)
-        let chosen = words.isEmpty ? titleWords(fallback) : words
-        if chosen.isEmpty { return "Terminal" }
-        return wordsThatFit(chosen, maxWidth: blobNameWidth)
+        if words.isEmpty {
+            let backup = titleWords(fallback)
+            if backup.isEmpty {
+                let trimmed = fallback.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? "Terminal" : trimmed
+            }
+            return wordsThatFit(backup, maxWidth: blobNameWidth)
+        }
+        return titleNoun(words)
+    }
+
+    /// The name in a sentence such as "facebook saved library" or "Veeze Genius note slices".
+    /// Ordinary words give way when a real name is there. The word keeps the title's own spelling.
+    static func titleNoun(_ words: [String]) -> String {
+        let content = words.filter { !isTitleStop($0) }
+        guard let first = content.first else { return words.first ?? "Terminal" }
+        let topical = content.filter { !isCommonVerb($0) && !isGenericTitleWord($0) && !isBareNumber($0) }
+        if let name = topical.first { return name }
+        let readable = content.filter { !isCommonVerb($0) && !isBareNumber($0) }
+        return readable.first ?? first
     }
 
     /// Width of a 10pt semibold label, in points. Used to keep the blob name whole.
@@ -550,8 +667,7 @@ enum TerminalBehavior {
         "7": 6.03, "8": 6.85, "9": 6.78, " ": 2.78, "-": 4.91,
     ]
 
-    /// Idle is orange and slow. A new response is blue and quicker.
-    /// A question is purple and the fastest.
+    /// Idle is orange. A new response is blue. A question is purple.
     static func statusPhrase(for face: Face) -> String {
         switch face {
         case .idle: return "Idle"
@@ -568,28 +684,28 @@ enum TerminalBehavior {
         }
     }
 
+    /// The status light no longer pulses. Zero keeps every face still.
     static func heartbeatBPM(for face: Face) -> Double {
         switch face {
-        case .idle: return 52
-        case .working: return 88
-        case .waiting: return 126
+        case .idle, .working, .waiting: return 0
         }
     }
 
-    /// Lub-dub brightness from 0 at rest to 1 at the first beat.
+    /// The heartbeat is off, so the light stays at rest.
     static func heartbeatLevel(seconds: Double, bpm: Double) -> Double {
-        guard bpm > 1 else { return 0 }
-        let period = 60.0 / bpm
-        var cycle = seconds.truncatingRemainder(dividingBy: period) / period
-        if cycle < 0 { cycle += 1 }
-        func pulse(_ center: Double, _ amp: Double) -> Double {
-            let distance = abs(cycle - center)
-            let width = 0.05
-            if distance >= width { return 0 }
-            let rise = 1 - distance / width
-            return amp * rise * rise
-        }
-        return min(1, max(pulse(0.08, 1), pulse(0.20, 0.7)))
+        _ = (seconds, bpm)
+        return 0
+    }
+
+    /// AppleScript prints window edges as whole numbers or reals such as `1024.0`.
+    private static func wholeNumber(_ text: String) -> Int? {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        if let value = Int(trimmed) { return value }
+        guard let value = Double(trimmed), value.isFinite else { return nil }
+        let nearest = value.rounded()
+        guard abs(value - nearest) < 0.001 else { return nil }
+        guard nearest >= Double(Int.min), nearest <= Double(Int.max) else { return nil }
+        return Int(nearest)
     }
 
     /// Placeholder length. The face itself truncates to the column width.
@@ -646,12 +762,21 @@ enum TerminalBehavior {
         return screen
     }
 
-    /// The blob keeps its color while idle. A response lights it blue.
-    /// A question lights it purple.
+    /// The figure keeps its slot color. A response and a question do not repaint it.
+    /// Status stays on the dot. A blue glow sits behind the figure.
     static func blobLightHex(slotHex: String, face: Face) -> String {
         switch face {
-        case .idle: return slotHex
-        case .working, .waiting: return statusColorHex(for: face)
+        case .idle, .working, .waiting: return slotHex
+        }
+    }
+
+    /// Soft blue behind a working or waiting blob. Idle has none.
+    static let workingGlowHex = "#3D8BFF"
+
+    static func showsWorkingGlow(_ face: Face) -> Bool {
+        switch face {
+        case .idle: return false
+        case .working, .waiting: return true
         }
     }
 
@@ -778,6 +903,45 @@ enum TerminalBehavior {
             if ["zsh", "bash", "sh", "fish"].contains(lower) { return nil }
             return word
         }
+    }
+
+    private static func isTitleStop(_ word: String) -> Bool {
+        let stops: Set<String> = [
+            "the", "a", "an", "of", "to", "for", "and", "or", "in", "on", "with", "into", "from",
+            "at", "by", "as", "your", "my", "our", "this", "that", "these", "those", "it", "its",
+        ]
+        return stops.contains(word.lowercased())
+    }
+
+    private static func isCommonVerb(_ word: String) -> Bool {
+        let verbs: Set<String> = [
+            "assign", "read", "list", "open", "extract", "make", "get", "set", "click", "stage",
+            "staged", "work", "look", "use", "add", "fix", "show", "keep", "port", "run", "wait",
+            "think", "retry", "retrying", "see", "find", "check", "update", "write", "save",
+            "start", "stop", "pull", "push", "build", "test", "scan", "grab", "watch", "turn",
+            "bring", "move", "send", "call", "ask", "tell", "give", "take", "want", "like",
+            "need", "help", "let", "going", "coming", "saved",
+        ]
+        return verbs.contains(word.lowercased())
+    }
+
+    private static func isGenericTitleWord(_ word: String) -> Bool {
+        let generic: Set<String> = [
+            "terminal", "terminals", "window", "windows", "title", "titles", "file", "files",
+            "note", "notes", "line", "lines", "app", "apps", "setting", "settings", "prompt",
+            "prompts", "response", "responses", "error", "errors", "server", "blob", "blobs",
+            "genius", "slice", "slices", "photo", "photos", "chip", "chips", "harness", "library",
+            "quadrant", "quadrants", "brightness", "volume", "toggle", "green", "connection",
+            "session", "sessions", "page", "pages", "shell", "tab", "tabs", "text", "name",
+            "names", "status", "light", "lights", "color", "colors", "folder", "path", "code",
+            "data", "thing", "things", "charge", "watts", "parallel", "failed", "grok", "please",
+            "just", "also", "still", "already",
+        ]
+        return generic.contains(word.lowercased())
+    }
+
+    private static func isBareNumber(_ word: String) -> Bool {
+        !word.isEmpty && word.allSatisfy(\.isNumber)
     }
 
     private static func isSpinner(_ word: String) -> Bool {

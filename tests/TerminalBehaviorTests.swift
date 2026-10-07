@@ -19,17 +19,20 @@ enum TerminalBehaviorTests {
         testCuddlerFollowsTheTerminal()
         testBlobUsesTheTerminalsOwnName()
         testBlobTitleFitsInThreeWords()
+        testBlobNameIsTheNounInTheTitle()
+        testFreeBlobsClaimTerminalsThatWereAlreadyOpen()
         testBlobStaysMarriedUntilTheTerminalEnds()
         testEachMarriedBlobShowsItsOwnResponse()
         testUnparsedListingKeepsTheGreenWindow()
         testLostMarriageReturnsToTheWindowInThatCorner()
+        testMarriageFollowsTheSameTerminalWhenItsWindowChanges()
         testStatusHeartbeats()
         testPageLockHoldsThenOpens()
         testDropHitsTheBlob()
         testNookKeepsTheSharedHeader()
         testHeaderSitsOnTheMenuBar()
         testBlobOpensAWindowAtTwentyPoint()
-        print("Terminal behavior: 23 cases passed")
+        print("Terminal behavior: 26 cases passed")
     }
 
     /// A download that prints "45%" must stay Working. Treating every
@@ -258,7 +261,7 @@ enum TerminalBehaviorTests {
         precondition(TerminalBehavior.promptName("grok") == "grok")
     }
 
-    /// The line under the blob is two or three whole words, short enough to read with no ellipsis.
+    /// The line under the blob is the topic noun, short enough to read with no ellipsis.
     static func testBlobTitleFitsInThreeWords() {
         let grok = "samuel — ⠴ - Thinking - Port NotchNook settings and Grok into Co… - grok — grok ▸ python — 64×35"
         let live = "samuel — ⠙ - Running: the green window - Coucou blob quadrants, charge watts, sta… - grok — grok ▸ osascript — 84×23"
@@ -269,8 +272,8 @@ enum TerminalBehaviorTests {
             TerminalBehavior.shortTitle("samuel — PROBE-BR — -zsh — 143×39", fallback: "Terminal 4"),
             TerminalBehavior.shortTitle("   ", fallback: "Terminal 1"),
         ]
-        precondition(names[0] == "Port NotchNook", names[0])
-        precondition(names[1] == "Coucou blob", names[1])
+        precondition(names[0] == "NotchNook", names[0])
+        precondition(names[1] == "Coucou", names[1])
         precondition(names[2] == "samuel", names[2])
         precondition(names[3] == "PROBE-BR", names[3])
         precondition(names[4] == "Terminal 1", names[4])
@@ -283,6 +286,65 @@ enum TerminalBehaviorTests {
                 "\(shown) is \(TerminalBehavior.labelWidth(shown)) wide"
             )
         }
+    }
+
+    /// A sentence in the terminal title becomes the one topic noun.
+    static func testBlobNameIsTheNounInTheTitle() {
+        let samples = [
+            ("samuel — facebook saved library - grok — grok ▸ python — 80×24", "facebook"),
+            ("samuel — coucou blob quadrants, charge watts - grok — grok ▸ python — 80×24", "coucou"),
+            ("samuel — Veeze Genius note slices staged in parallel - grok — grok ▸ python — 52×49", "Veeze"),
+            ("samuel — kanyewest genius lines - grok — grok ▸ python — 80×24", "kanyewest"),
+            ("samuel — Assign blobs to the coucou window - grok — grok ▸ head — 83×23", "coucou"),
+            ("samuel — ⠴ - Thinking - Port NotchNook settings and Grok into Coucou - grok — grok ▸ python — 64×35", "NotchNook"),
+        ]
+        for (title, noun) in samples {
+            let shown = TerminalBehavior.shortTitle(title, fallback: "Terminal 1")
+            precondition(shown == noun, "\(noun) came back as \(shown)")
+            precondition(!shown.contains(" "), shown)
+        }
+    }
+
+    /// Blobs with no live terminal take the windows that were already open.
+    /// A blob that already has one keeps it. A window that appears later stays free.
+    static func testFreeBlobsClaimTerminalsThatWereAlreadyOpen() {
+        let open = [
+            TerminalBehavior.ListedWindow(id: 11, title: "facebook", tty: "/dev/ttys011"),
+            TerminalBehavior.ListedWindow(id: 12, title: "coucou", tty: "/dev/ttys012"),
+            TerminalBehavior.ListedWindow(id: 13, title: "Veeze", tty: "/dev/ttys013"),
+            TerminalBehavior.ListedWindow(id: 14, title: "kanyewest", tty: "/dev/ttys014"),
+            TerminalBehavior.ListedWindow(id: 15, title: "later", tty: "/dev/ttys015"),
+        ]
+        let startup = open.prefix(4).map { TerminalBehavior.StartupWindow(id: $0.id, tty: $0.tty) }
+        let slots = [
+            TerminalBehavior.ClaimSlot(id: "green", windowID: nil, tty: ""),
+            TerminalBehavior.ClaimSlot(id: "orange", windowID: 12, tty: "/dev/ttys012"),
+            TerminalBehavior.ClaimSlot(id: "purple", windowID: nil, tty: ""),
+            TerminalBehavior.ClaimSlot(id: "red", windowID: nil, tty: ""),
+        ]
+        let claimed = TerminalBehavior.claimStartupWindows(
+            slots: slots,
+            open: open,
+            startup: Array(startup),
+            freeIDs: ["green", "purple", "red"]
+        )
+        precondition(claimed[0].windowID == 11 && claimed[0].tty == "/dev/ttys011", "green takes facebook")
+        precondition(claimed[1].windowID == 12 && claimed[1].tty == "/dev/ttys012", "yellow keeps coucou")
+        precondition(claimed[2].windowID == 13 && claimed[2].tty == "/dev/ttys013", "purple takes Veeze")
+        precondition(claimed[3].windowID == 14 && claimed[3].tty == "/dev/ttys014", "red takes kanyewest")
+        precondition(claimed.allSatisfy { $0.windowID != 15 }, "a terminal opened later stays unclaimed")
+
+        let moved = [
+            TerminalBehavior.ListedWindow(id: 211, title: "facebook", tty: "/dev/ttys011"),
+        ]
+        let followed = TerminalBehavior.claimStartupWindows(
+            slots: [TerminalBehavior.ClaimSlot(id: "green", windowID: nil, tty: "")],
+            open: moved,
+            startup: [TerminalBehavior.StartupWindow(id: 11, tty: "/dev/ttys011")],
+            freeIDs: ["green"]
+        )
+        precondition(followed[0].windowID == 211, "the same tty is still the terminal that was already open")
+        precondition(TerminalBehavior.startupGrace == 8, "Coucou keeps looking briefly for terminals already open")
     }
 
     /// A blob keeps the window it opened until that window is gone.
@@ -306,8 +368,8 @@ enum TerminalBehaviorTests {
         let stranger = TerminalBehavior.marriage(windowID: nil, liveWindowIDs: [23143, 23148], listed: true)
         precondition(stranger.windowID == nil && stranger.terminated == false, "an open window the blob did not open stays unclaimed")
 
-        precondition(TerminalBehavior.shortTitle(running, fallback: "Terminal 1") == "Read the terminal", TerminalBehavior.shortTitle(running, fallback: "Terminal 1"))
-        precondition(TerminalBehavior.shortTitle(quiet, fallback: "Terminal 2") == "Coucou toggle", TerminalBehavior.shortTitle(quiet, fallback: "Terminal 2"))
+        precondition(TerminalBehavior.shortTitle(running, fallback: "Terminal 1") == "terminal", TerminalBehavior.shortTitle(running, fallback: "Terminal 1"))
+        precondition(TerminalBehavior.shortTitle(quiet, fallback: "Terminal 2") == "Coucou", TerminalBehavior.shortTitle(quiet, fallback: "Terminal 2"))
 
         let lights = [
             TerminalBehavior.classify(title: running, contents: "   "),
@@ -324,10 +386,10 @@ enum TerminalBehaviorTests {
 
         let desk = try! String(contentsOfFile: "NotchBuddy/Sources/App/TerminalDesk.swift", encoding: .utf8)
         let tick = sourceSlice(desk, from: "private func tick()", until: "private func apply(")
-        precondition(tick.contains("TerminalBehavior.marriage"), "a tick keeps the window the blob opened")
+        precondition(tick.contains("marriedWindow"), "a tick keeps the window the blob opened")
         precondition(tick.contains("classify(title:"), "each blob reads its own window title")
-        precondition(!tick.contains("claimOpenWindowsOnce"), "a tick must not marry a window the blob did not open")
-        precondition(!desk.contains("claimOpenWindowsOnce"), "open windows are not claimed on launch")
+        precondition(tick.contains("claimStartupWindows"), "a free blob claims a terminal that was already open")
+        precondition(tick.contains("startupSessions"), "a tick remembers the terminals open when Coucou started")
         let view = try! String(contentsOfFile: "NotchBuddy/Sources/App/TerminalNotchView.swift", encoding: .utf8)
         let compact = sourceSlice(view, from: "struct CompactTerminalFaces", until: "struct TerminalSettingsSection")
         precondition(compact.contains("statusColorHex"), "each compact blob shows its own status light")
@@ -338,7 +400,8 @@ enum TerminalBehaviorTests {
     }
 
     /// Each married blob follows its own window. Grok's prompt box is not a status.
-    /// A response in that window's title lights the blob blue. The prompt box stays orange.
+    /// A response keeps the blob's own color and lights the status dot blue.
+    /// A blue glow sits behind the figure. The prompt box stays orange.
     static func testEachMarriedBlobShowsItsOwnResponse() {
         let chrome = """
           ╭──────────────────────────────────────────────────────────╮
@@ -360,14 +423,39 @@ enum TerminalBehaviorTests {
         precondition(yellow.face == .working, "another window's response was \(yellow.face)")
         precondition(quiet.face == .idle, "the prompt box hid the quiet title as \(quiet.face)")
         precondition(question.face == .waiting, "a question was \(question.face)")
-        precondition(TerminalBehavior.blobLightHex(slotHex: "#22C55E", face: green.face) == "#3D8BFF")
-        precondition(TerminalBehavior.blobLightHex(slotHex: "#F29B38", face: yellow.face) == "#3D8BFF")
+        precondition(TerminalBehavior.blobLightHex(slotHex: "#22C55E", face: green.face) == "#22C55E")
+        precondition(TerminalBehavior.blobLightHex(slotHex: "#F29B38", face: yellow.face) == "#F29B38")
         precondition(TerminalBehavior.blobLightHex(slotHex: "#22C55E", face: quiet.face) == "#22C55E")
-        precondition(TerminalBehavior.blobLightHex(slotHex: "#7C5CFF", face: question.face) == "#C084FC")
+        precondition(TerminalBehavior.blobLightHex(slotHex: "#7C5CFF", face: question.face) == "#7C5CFF")
+        precondition(TerminalBehavior.statusColorHex(for: green.face) == "#3D8BFF")
+        precondition(TerminalBehavior.statusColorHex(for: question.face) == "#C084FC")
+        precondition(TerminalBehavior.showsWorkingGlow(green.face))
+        precondition(TerminalBehavior.showsWorkingGlow(question.face))
+        precondition(TerminalBehavior.showsWorkingGlow(quiet.face) == false)
+        precondition(TerminalBehavior.workingGlowHex == "#3D8BFF")
         precondition(TerminalBehavior.classify(title: incoming, contents: "samuel@mac ~ %").face == .idle)
 
         let view = try! String(contentsOfFile: "NotchBuddy/Sources/App/TerminalNotchView.swift", encoding: .utf8)
-        precondition(view.contains("blobLightHex"), "the blob lights up in its own terminal's status color")
+        let open = sourceSlice(view, from: "struct TerminalFaceButton", until: "struct TerminalPageLockButton")
+        precondition(open.contains("workingGlow"), "the open blob glows while it is working")
+        precondition(open.contains("statusColorHex"), "the open status dot stays beside the name")
+        precondition(!open.contains("blobLightHex"), "the open blob does not take the status color")
+        guard let glow = open.range(of: "workingGlow"), let bot = open.range(of: "MiniBotCanvasView") else {
+            preconditionFailure("the open face lost its glow or its figure")
+        }
+        precondition(glow.lowerBound < bot.lowerBound, "the glow is drawn behind the figure")
+        let compactFace = sourceSlice(view, from: "struct CompactTerminalFaces", until: "struct TerminalSettingsSection")
+        precondition(compactFace.contains("workingGlow"), "the closed notch glows behind a working blob")
+        precondition(compactFace.contains("bottomTrailing"), "the closed-notch status light stays at the bottom right")
+        precondition(compactFace.contains("statusColorHex"), "the closed-notch status light keeps its color")
+        precondition(!compactFace.contains("blobLightHex"), "the closed blob does not take the status color")
+        precondition(!compactFace.contains(".stroke"), "the working circle is not drawn on top of the closed blob")
+        let task = sourceSlice(view, from: "private func faceTask", until: "struct TerminalPromptField")
+        precondition(task.contains("color: slot.color"), "the figure is painted with the slot color")
+        precondition(task.contains("holdSlotColor: true"), "a working terminal blob does not wash its body")
+        let engine = try! String(contentsOfFile: "NotchBuddy/Sources/App/BotEngine.swift", encoding: .utf8)
+        let bodyDraw = sourceSlice(engine, from: "private func drawBody", until: "private func drawBlush")
+        precondition(bodyDraw.contains("holdSlotColor"), "the body fill skips the state wash when the slot color is held")
     }
 
     /// Terminal's `tab` is a window tab, so the listing comes back as "104tabsamuel".
@@ -396,7 +484,8 @@ enum TerminalBehaviorTests {
         precondition(married.windowID == 104 && married.terminated == false)
         let face = TerminalBehavior.classify(title: read.windows[1].title, contents: "❯\nGrok 4.7\nShift+Tab:mode")
         precondition(face.face == .working, "the green response was \(face.face)")
-        precondition(TerminalBehavior.blobLightHex(slotHex: "#22C55E", face: face.face) == "#3D8BFF")
+        precondition(TerminalBehavior.blobLightHex(slotHex: "#22C55E", face: face.face) == "#22C55E")
+        precondition(TerminalBehavior.showsWorkingGlow(face.face))
         precondition(TerminalBehavior.statusColorHex(for: face.face) == "#3D8BFF")
 
         let gone = TerminalBehavior.parseSnapshot("\u{1e}", slotCount: 4)
@@ -413,7 +502,7 @@ enum TerminalBehaviorTests {
 
     /// A relaunch drops the saved window id, but the window Coucou tiled into
     /// that color's corner is still there. The blob marries that window again
-    /// and lights from its title. A terminal sitting somewhere else stays unclaimed.
+    /// and lights from its title. A window outside every corner is not that corner.
     static func testLostMarriageReturnsToTheWindowInThatCorner() {
         let green = TerminalBehavior.quadrantBounds(
             slotID: "green", visibleLeft: 0, visibleTop: 45, visibleWidth: 2048, visibleHeight: 1285
@@ -449,7 +538,8 @@ enum TerminalBehaviorTests {
         precondition(TerminalBehavior.windowInCorner(quadrant: green, windows: doubled, taken: []) == nil, "two windows in one corner are not guessed")
         let face = TerminalBehavior.classify(title: read.windows[0].title, contents: "❯\nShift+Tab:mode")
         precondition(face.face == .working, "the recovered window's response was \(face.face)")
-        precondition(TerminalBehavior.blobLightHex(slotHex: "#22C55E", face: face.face) == "#3D8BFF")
+        precondition(TerminalBehavior.blobLightHex(slotHex: "#22C55E", face: face.face) == "#22C55E")
+        precondition(TerminalBehavior.showsWorkingGlow(face.face))
 
         let desk = try! String(contentsOfFile: "NotchBuddy/Sources/App/TerminalDesk.swift", encoding: .utf8)
         let tick = sourceSlice(desk, from: "private func tick()", until: "private func apply(")
@@ -458,6 +548,64 @@ enum TerminalBehaviorTests {
         precondition(open.contains("windowInCorner"), "pressing the blob focuses the window already in that corner")
         let snapshot = sourceSlice(desk, from: "static func snapshot", until: "nonisolated static func openOrFocus")
         precondition(snapshot.contains("bounds of w"), "the listing reads each window's own frame")
+    }
+
+    /// Terminal gives a session a new window id when its tab moves.
+    /// The blob stays on that session. A window Coucou cannot read is skipped,
+    /// so one bad window does not hide the rest. The heartbeat stays off.
+    static func testMarriageFollowsTheSameTerminalWhenItsWindowChanges() {
+        let live = [
+            TerminalBehavior.LiveSession(id: 171, tty: "/dev/ttys000"),
+            TerminalBehavior.LiveSession(id: 292, tty: "/dev/ttys001"),
+        ]
+        let repaired = TerminalBehavior.marriedWindow(
+            savedID: 170,
+            savedTTY: "/dev/ttys000",
+            live: live,
+            listed: true
+        )
+        precondition(repaired.windowID == 171 && repaired.terminated == false, "the same tty is still the green terminal")
+        let stayed = TerminalBehavior.marriedWindow(savedID: 292, savedTTY: "/dev/ttys001", live: live, listed: true)
+        precondition(stayed.windowID == 292 && stayed.terminated == false)
+        let gone = TerminalBehavior.marriedWindow(
+            savedID: 99,
+            savedTTY: "",
+            live: live,
+            listed: true
+        )
+        precondition(gone.terminated && gone.windowID == nil, "a closed terminal still ends the marriage")
+        let unread = TerminalBehavior.marriedWindow(savedID: 99, savedTTY: "/dev/ttys009", live: [], listed: false)
+        precondition(unread.windowID == 99 && unread.terminated == false, "a failed listing keeps the marriage")
+        let ambiguous = TerminalBehavior.marriedWindow(
+            savedID: 99,
+            savedTTY: "/dev/ttys000",
+            live: [
+                TerminalBehavior.LiveSession(id: 171, tty: "/dev/ttys000"),
+                TerminalBehavior.LiveSession(id: 172, tty: "/dev/ttys000"),
+            ],
+            listed: true
+        )
+        precondition(ambiguous.terminated && ambiguous.windowID == nil, "two windows with one tty are not guessed")
+
+        let listing = "170\t0.0\t45.0\t1024.0\t687.0\t/dev/ttys000\tsamuel — ⠋ - Running: keep this session\n643\t\t\t\t\t/dev/ttys003\tsamuel — bottom left"
+        let read = TerminalBehavior.parseSnapshot(listing + "\u{1e}", slotCount: 2)
+        precondition(read.listed, "a tty listing is a real window list")
+        precondition(read.windows[0].tty == "/dev/ttys000", "tty was \(read.windows[0].tty)")
+        precondition(read.windows[0].bounds == TerminalBehavior.TerminalBounds(left: 0, top: 45, right: 1024, bottom: 687))
+        precondition(read.windows[0].title == "samuel — ⠋ - Running: keep this session")
+        precondition(read.windows[1].tty == "/dev/ttys003" && read.windows[1].bounds == nil, "a window with no frame still keeps its tty")
+
+        let desk = try! String(contentsOfFile: "NotchBuddy/Sources/App/TerminalDesk.swift", encoding: .utf8)
+        let snapshot = sourceSlice(desk, from: "static func snapshot", until: "nonisolated static func openOrFocus")
+        precondition(snapshot.contains("tty of selected tab"), "the listing reads the session tty")
+        precondition(!snapshot.contains("on error"), "a window with no id must not abort the listing")
+        let tick = sourceSlice(desk, from: "private func tick()", until: "private func apply(")
+        precondition(tick.contains("marriedWindow"), "a tick follows the session when the window id changes")
+        precondition(tick.contains("placeInFlight"), "moving a tab does not divorce the blob mid-place")
+        let open = sourceSlice(desk, from: "func openOrFocus(", until: "func togglePageLock(")
+        precondition(open.contains("resolvedWindowID"), "a press focuses the session, not a new window")
+        let resolver = sourceSlice(desk, from: "private func resolvedWindowID", until: "func openOrFocus")
+        precondition(resolver.contains("marriedWindow"), "the press follows the saved session")
     }
 
     /// The closed notch keeps the white blob in the left ear and the four blobs in the right ear.
@@ -496,7 +644,7 @@ enum TerminalBehaviorTests {
         precondition(bot.contains("engine.setState(task.state"), "each colored blob follows its own terminal")
     }
 
-    /// Idle is a slow orange beat. A response is a faster blue beat. A question is the fastest purple beat.
+    /// Idle, a response, and a question keep their colors. The heartbeat is off.
     static func testStatusHeartbeats() {
         precondition(TerminalBehavior.statusPhrase(for: .idle) == "Idle")
         precondition(TerminalBehavior.statusPhrase(for: .working) == "New response available")
@@ -504,15 +652,14 @@ enum TerminalBehaviorTests {
         precondition(TerminalBehavior.statusColorHex(for: .idle) == "#FF9F1C")
         precondition(TerminalBehavior.statusColorHex(for: .working) == "#3D8BFF")
         precondition(TerminalBehavior.statusColorHex(for: .waiting) == "#C084FC")
-        let idle = TerminalBehavior.heartbeatBPM(for: .idle)
-        let response = TerminalBehavior.heartbeatBPM(for: .working)
-        let input = TerminalBehavior.heartbeatBPM(for: .waiting)
-        precondition(idle < response && response < input, "bpm \(idle) \(response) \(input)")
-        precondition(TerminalBehavior.heartbeatLevel(seconds: 0.08, bpm: 60) > 0.9)
-        precondition(TerminalBehavior.heartbeatLevel(seconds: 0.5, bpm: 60) == 0)
-        let idlePeak = 0.08 * (60.0 / idle)
-        let inputPeak = 0.08 * (60.0 / input)
-        precondition(abs(idlePeak - inputPeak) > 0.05, "peaks were too close")
+        precondition(TerminalBehavior.heartbeatBPM(for: .idle) == 0)
+        precondition(TerminalBehavior.heartbeatBPM(for: .working) == 0)
+        precondition(TerminalBehavior.heartbeatBPM(for: .waiting) == 0)
+        precondition(TerminalBehavior.heartbeatLevel(seconds: 0.08, bpm: 60) == 0)
+        precondition(TerminalBehavior.heartbeatLevel(seconds: 0.5, bpm: 126) == 0)
+        let faces = try! String(contentsOfFile: "NotchBuddy/Sources/App/TerminalNotchView.swift", encoding: .utf8)
+        precondition(!faces.contains("heartbeatLevel"), "the blobs no longer pulse")
+        precondition(!faces.contains("heartbeatBPM"), "the blobs no longer pulse")
     }
 
     /// A locked terminal page stays open for 20 seconds after the pointer leaves.

@@ -171,6 +171,8 @@ let BotStates: [BotState: BotStateCfg] = [
 final class BotEngine: ObservableObject {
     var isMini: Bool = false
     var bodyColor: CGColor? = nil    // override for mini bots
+    /// When set, the slot color stays. Working and waiting do not wash the body.
+    var holdSlotColor: Bool = false
 
     // Animation state (mirrors prototype 's' object)
     var yaw:    CGFloat = 0
@@ -1052,11 +1054,9 @@ final class BotEngine: ObservableObject {
 
     private func drawBody(ctx: inout GraphicsContext, path: Path, R: CGFloat, rx: CGFloat, ry: CGFloat) {
         if let bc = bodyColor {
-            // Mini bots keep their slot color. The terminal state tints that color
-            // so a working blob and a waiting blob do not look the same.
             ctx.fill(path, with: .color(Color(cgColor: bc)))
             let effectiveTint = tint * (1 - morph)
-            if effectiveTint > 0.01 {
+            if !holdSlotColor, effectiveTint > 0.01 {
                 let tc = colorFromTuple(col)
                 ctx.fill(path, with: .color(tc.opacity(Double(0.62 * effectiveTint))))
             }

@@ -90,50 +90,35 @@ struct TerminalFaceButton: View {
                 desk.beginAsk(slot.id)
             }
         } label: {
-            TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
-                let level = TerminalBehavior.heartbeatLevel(
-                    seconds: context.date.timeIntervalSinceReferenceDate,
-                    bpm: TerminalBehavior.heartbeatBPM(for: reading)
-                )
-                VStack(spacing: 2) {
+            VStack(spacing: 2) {
+                ZStack {
+                    workingGlow(active: TerminalBehavior.showsWorkingGlow(reading), diameter: 46, blur: 9)
                     MiniBotCanvasView(task: faceTask(slot, face))
                         .frame(width: 28 / 0.6, height: 28 / 0.6)
-                        .frame(width: 28, height: 28)
-                        .opacity(0.78 + 0.22 * level)
-                        .overlay {
-                            Circle()
-                                .stroke(
-                                    Color(hex: TerminalBehavior.blobLightHex(slotHex: slot.color, face: reading)),
-                                    lineWidth: reading == .idle ? 0 : 2.5
-                                )
-                                .opacity(reading == .idle ? 0 : 0.45 + 0.55 * level)
-                                .padding(1)
-                        }
-                        .overlay {
-                            Circle()
-                                .stroke(
-                                    ringColor(selected: selected, asking: desk.askingID == slot.id, dropping: desk.dropSlotID == slot.id),
-                                    lineWidth: desk.dropSlotID == slot.id ? 2.5 : 1.5
-                                )
-                                .padding(1)
-                        }
-                    HStack(spacing: 4) {
-                        Circle()
-                            .fill(Color(hex: TerminalBehavior.statusColorHex(for: reading)))
-                            .frame(width: 6, height: 6)
-                            .scaleEffect(0.85 + 0.45 * level)
-                            .opacity(0.75 + 0.25 * level)
-                            .accessibilityHidden(true)
-                        Text(name)
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(selected ? Color.white : Color(hex: "#C8CCD2"))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.7)
-                            .allowsTightening(true)
-                    }
                 }
-                .frame(maxWidth: .infinity)
+                .frame(width: 28, height: 28)
+                .overlay {
+                    Circle()
+                        .stroke(
+                            ringColor(selected: selected, asking: desk.askingID == slot.id, dropping: desk.dropSlotID == slot.id),
+                            lineWidth: desk.dropSlotID == slot.id ? 2.5 : 1.5
+                        )
+                        .padding(1)
+                }
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(Color(hex: TerminalBehavior.statusColorHex(for: reading)))
+                        .frame(width: 6, height: 6)
+                        .accessibilityHidden(true)
+                    Text(name)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(selected ? Color.white : Color(hex: "#C8CCD2"))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                        .allowsTightening(true)
+                }
             }
+            .frame(maxWidth: .infinity)
         }
         .buttonStyle(.plain)
         .help("\(name). \(phrase). Opens this terminal in the \(TerminalBehavior.cornerPhrase(slot.id)). Drop a file here to attach it to this chat.")
@@ -350,31 +335,19 @@ struct CompactTerminalFaces: View {
                         desk.beginAsk(slot.id)
                     }
                 } label: {
-                    TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
-                        let level = TerminalBehavior.heartbeatLevel(
-                            seconds: context.date.timeIntervalSinceReferenceDate,
-                            bpm: TerminalBehavior.heartbeatBPM(for: reading)
-                        )
+                    ZStack {
+                        workingGlow(active: TerminalBehavior.showsWorkingGlow(reading), diameter: 18, blur: 3.5)
                         MiniBotCanvasView(task: faceTask(slot, face))
                             .frame(width: 12 / 0.6, height: 12 / 0.6)
-                            .frame(width: 12, height: 12)
-                            .opacity(0.72 + 0.28 * level)
-                            .overlay {
-                                Circle()
-                                    .stroke(
-                                        Color(hex: TerminalBehavior.blobLightHex(slotHex: slot.color, face: reading)),
-                                        lineWidth: reading == .idle ? 0 : 1.5
-                                    )
-                                    .opacity(reading == .idle ? 0 : 0.45 + 0.55 * level)
-                            }
-                            .overlay(alignment: .bottomTrailing) {
-                                Circle()
-                                    .fill(Color(hex: TerminalBehavior.statusColorHex(for: reading)))
-                                    .frame(width: TerminalBehavior.collapsedStatusLight, height: TerminalBehavior.collapsedStatusLight)
-                                    .offset(x: TerminalBehavior.collapsedStatusShift, y: TerminalBehavior.collapsedStatusShift)
-                                    .accessibilityHidden(true)
-                            }
                     }
+                    .frame(width: 12, height: 12)
+                    .overlay(alignment: .bottomTrailing) {
+                            Circle()
+                                .fill(Color(hex: TerminalBehavior.statusColorHex(for: reading)))
+                                .frame(width: TerminalBehavior.collapsedStatusLight, height: TerminalBehavior.collapsedStatusLight)
+                                .offset(x: TerminalBehavior.collapsedStatusShift, y: TerminalBehavior.collapsedStatusShift)
+                                .accessibilityHidden(true)
+                        }
                 }
                 .buttonStyle(.plain)
                 .help("\(name). \(phrase). Opens this terminal in the \(TerminalBehavior.cornerPhrase(slot.id)).")
@@ -392,7 +365,7 @@ struct TerminalSettingsSection: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Terminals")
                 .font(.system(size: 13, weight: .semibold))
-            Text("Green is the top left, yellow the top right, purple the bottom left, and red the bottom right. Each one opens in that corner, and the little cuddler matches that terminal. The name is two or three words from the terminal, short enough to read whole. The dot is orange when idle, blue when a new response is available, and purple when it needs your input. Hold this page open keeps it up for 20 seconds after the pointer leaves, and the lock opens during the last 3 seconds. Drop a file on a color to attach it to that chat. An empty folder uses your home folder.")
+            Text("Green is the top left, yellow the top right, purple the bottom left, and red the bottom right. Each one opens in that corner, and the little cuddler matches that terminal. The name is the noun from the terminal title. The dot is orange when idle, blue when a new response is available, and purple when it needs your input. Hold this page open keeps it up for 20 seconds after the pointer leaves, and the lock opens during the last 3 seconds. Drop a file on a color to attach it to that chat. An empty folder uses your home folder.")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -465,8 +438,19 @@ private func faceTask(_ slot: TerminalSlot, _ face: TerminalFace) -> AgentTask {
         state: face.botState,
         steps: [],
         source: .agent,
-        isIntegration: true
+        isIntegration: true,
+        holdSlotColor: true
     )
+}
+
+/// Blue halo behind a busy blob. Drawn before the figure, so the character covers the middle.
+private func workingGlow(active: Bool, diameter: CGFloat, blur: CGFloat) -> some View {
+    Circle()
+        .fill(Color(hex: TerminalBehavior.workingGlowHex))
+        .frame(width: diameter, height: diameter)
+        .blur(radius: blur)
+        .opacity(active ? 0.75 : 0)
+        .accessibilityHidden(true)
 }
 
 struct TerminalPromptField: NSViewRepresentable {
