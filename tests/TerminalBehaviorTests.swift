@@ -21,6 +21,9 @@ enum TerminalBehaviorTests {
         testBlobTitleFitsInThreeWords()
         testBlobNameIsTheNounInTheTitle()
         testFreeBlobsClaimTerminalsThatWereAlreadyOpen()
+        testLockedNounStaysUntilTheTerminalCloses()
+        testPressFocusesAndHoldTiles()
+        testToolClaimShinesAndWaitingFlashes()
         testBlobStaysMarriedUntilTheTerminalEnds()
         testEachMarriedBlobShowsItsOwnResponse()
         testUnparsedListingKeepsTheGreenWindow()
@@ -32,7 +35,7 @@ enum TerminalBehaviorTests {
         testNookKeepsTheSharedHeader()
         testHeaderSitsOnTheMenuBar()
         testBlobOpensAWindowAtTwentyPoint()
-        print("Terminal behavior: 26 cases passed")
+        print("Terminal behavior: 29 cases passed")
     }
 
     /// A download that prints "45%" must stay Working. Treating every
@@ -132,7 +135,7 @@ enum TerminalBehaviorTests {
         )
         let open = sourceSlice(text, from: "func openNew", until: "enum CotypistLink")
         let place = sourceSlice(text, from: "private static func place(", until: "func placeMany")
-        let many = sourceSlice(text, from: "func placeMany", until: "private static func focus")
+        let many = sourceSlice(text, from: "func placeMany", until: "static func focus")
         for slice in [open, place, many] {
             precondition(slice.contains("moveTabToOwnWindow"), "detach before placing the window")
             let rememberAt = slice.range(of: "rememberWindowFrames")!
@@ -211,7 +214,7 @@ enum TerminalBehaviorTests {
         precondition(reflow.contains("quadrantPlacements"))
         precondition(!reflow.contains("tiledFrames"))
         let place = sourceSlice(desk, from: "private static func place(", until: "func placeMany")
-        let many = sourceSlice(desk, from: "func placeMany", until: "private static func focus")
+        let many = sourceSlice(desk, from: "func placeMany", until: "static func focus")
         for slice in [place, many] {
             precondition(slice.contains("tty of selected tab"), "the moved tab is found again after it leaves the set")
             precondition(slice.contains("set bounds of placedWindow"), "bounds land on the window that owns the tab")
@@ -305,46 +308,143 @@ enum TerminalBehaviorTests {
         }
     }
 
-    /// Blobs with no live terminal take the windows that were already open.
-    /// A blob that already has one keeps it. A window that appears later stays free.
+    /// While Terminal is restoring, a free blob takes a plain shell.
+    /// After that, a plain shell stays free and Xcode, Grok, or Claude is still claimed.
+    /// A blob that already has a window keeps it.
     static func testFreeBlobsClaimTerminalsThatWereAlreadyOpen() {
-        let open = [
-            TerminalBehavior.ListedWindow(id: 11, title: "facebook", tty: "/dev/ttys011"),
+        let restoring = [
+            TerminalBehavior.ListedWindow(id: 11, title: "samuel — -zsh — 80×24", tty: "/dev/ttys011"),
             TerminalBehavior.ListedWindow(id: 12, title: "coucou", tty: "/dev/ttys012"),
-            TerminalBehavior.ListedWindow(id: 13, title: "Veeze", tty: "/dev/ttys013"),
-            TerminalBehavior.ListedWindow(id: 14, title: "kanyewest", tty: "/dev/ttys014"),
+            TerminalBehavior.ListedWindow(id: 13, title: "xcodebuild", tty: "/dev/ttys013", process: "xcodebuild test"),
+            TerminalBehavior.ListedWindow(id: 14, title: "claude", tty: "/dev/ttys014"),
             TerminalBehavior.ListedWindow(id: 15, title: "later", tty: "/dev/ttys015"),
         ]
-        let startup = open.prefix(4).map { TerminalBehavior.StartupWindow(id: $0.id, tty: $0.tty) }
         let slots = [
             TerminalBehavior.ClaimSlot(id: "green", windowID: nil, tty: ""),
             TerminalBehavior.ClaimSlot(id: "orange", windowID: 12, tty: "/dev/ttys012"),
             TerminalBehavior.ClaimSlot(id: "purple", windowID: nil, tty: ""),
             TerminalBehavior.ClaimSlot(id: "red", windowID: nil, tty: ""),
         ]
-        let claimed = TerminalBehavior.claimStartupWindows(
+        let claimed = TerminalBehavior.claimFreeWindows(
             slots: slots,
-            open: open,
-            startup: Array(startup),
-            freeIDs: ["green", "purple", "red"]
+            open: restoring,
+            freeIDs: ["green", "purple", "red"],
+            acceptPlain: true
         )
-        precondition(claimed[0].windowID == 11 && claimed[0].tty == "/dev/ttys011", "green takes facebook")
+        precondition(claimed[0].windowID == 13 && claimed[0].tty == "/dev/ttys013", "green takes Xcode before the shell")
         precondition(claimed[1].windowID == 12 && claimed[1].tty == "/dev/ttys012", "yellow keeps coucou")
-        precondition(claimed[2].windowID == 13 && claimed[2].tty == "/dev/ttys013", "purple takes Veeze")
-        precondition(claimed[3].windowID == 14 && claimed[3].tty == "/dev/ttys014", "red takes kanyewest")
-        precondition(claimed.allSatisfy { $0.windowID != 15 }, "a terminal opened later stays unclaimed")
+        precondition(claimed[2].windowID == 14 && claimed[2].tty == "/dev/ttys014", "purple takes Claude")
+        precondition(claimed[3].windowID == 11 && claimed[3].tty == "/dev/ttys011", "red takes the shell that is left")
+        precondition(claimed.allSatisfy { $0.windowID != 15 }, "the fifth window waits for a free blob")
 
-        let moved = [
-            TerminalBehavior.ListedWindow(id: 211, title: "facebook", tty: "/dev/ttys011"),
+        let shellFirst = [
+            TerminalBehavior.ListedWindow(id: 31, title: "samuel — -zsh — 80×24", tty: "/dev/ttys031"),
+            TerminalBehavior.ListedWindow(id: 32, title: "samuel — grok — grok ▸ python — 80×24", tty: "/dev/ttys032"),
         ]
-        let followed = TerminalBehavior.claimStartupWindows(
-            slots: [TerminalBehavior.ClaimSlot(id: "green", windowID: nil, tty: "")],
-            open: moved,
-            startup: [TerminalBehavior.StartupWindow(id: 11, tty: "/dev/ttys011")],
-            freeIDs: ["green"]
+        let ordered = TerminalBehavior.claimFreeWindows(
+            slots: [
+                TerminalBehavior.ClaimSlot(id: "green", windowID: nil, tty: ""),
+                TerminalBehavior.ClaimSlot(id: "orange", windowID: nil, tty: ""),
+                TerminalBehavior.ClaimSlot(id: "purple", windowID: 12, tty: "/dev/ttys012"),
+                TerminalBehavior.ClaimSlot(id: "red", windowID: nil, tty: ""),
+            ],
+            open: shellFirst,
+            freeIDs: ["green", "orange", "red"],
+            acceptPlain: true
         )
-        precondition(followed[0].windowID == 211, "the same tty is still the terminal that was already open")
-        precondition(TerminalBehavior.startupGrace == 8, "Coucou keeps looking briefly for terminals already open")
+        precondition(ordered[0].windowID == 32 && ordered[0].tty == "/dev/ttys032", "green takes Grok when the shell is listed first")
+        precondition(ordered[1].windowID == 31 && ordered[1].tty == "/dev/ttys031", "yellow takes the shell that is left")
+        precondition(ordered[2].windowID == 12, "purple keeps its window")
+        precondition(ordered[3].windowID == nil, "red stays free once the tool and the shell are taken")
+
+        let later = [
+            TerminalBehavior.ListedWindow(id: 21, title: "samuel — -zsh — 80×24", tty: "/dev/ttys021"),
+            TerminalBehavior.ListedWindow(id: 22, title: "samuel — grok — grok ▸ python — 80×24", tty: "/dev/ttys022"),
+        ]
+        let settled = TerminalBehavior.claimFreeWindows(
+            slots: slots,
+            open: later,
+            freeIDs: ["green", "purple", "red"],
+            acceptPlain: false
+        )
+        precondition(settled[0].windowID == 22 && settled[0].tty == "/dev/ttys022", "green takes the later Grok window")
+        precondition(settled[1].windowID == 12, "yellow keeps its window")
+        precondition(settled[2].windowID == nil && settled[3].windowID == nil, "plain shells opened later stay free")
+        precondition(settled.allSatisfy { $0.windowID != 21 }, "the plain shell stays unclaimed")
+        precondition(TerminalBehavior.startupGrace == 8, "plain shells stay claimable for 8 seconds after the first window")
+    }
+
+    /// The first good noun stays. A typed name is not a placeholder. A closed terminal clears it.
+    static func testLockedNounStaysUntilTheTerminalCloses() {
+        let first = TerminalBehavior.lockNoun(current: "", candidate: "Veeze", sessionEnded: false)
+        precondition(first == "Veeze", "the first noun locks")
+        let kept = TerminalBehavior.lockNoun(current: first, candidate: "Preparing", sessionEnded: false)
+        precondition(kept == "Veeze", "a later title does not replace the noun")
+        let typed = TerminalBehavior.lockNoun(current: "Play on Words", candidate: "hockey", sessionEnded: false)
+        precondition(typed == "Play on Words", "a typed name stays")
+        let corrected = TerminalBehavior.lockNoun(current: "Replace", candidate: "Voice", sessionEnded: false)
+        precondition(corrected == "Voice", "a weak lock changes once to the topic noun")
+        precondition(TerminalBehavior.lockNoun(current: "Finish", candidate: "Penwork", sessionEnded: false) == "Penwork")
+        precondition(TerminalBehavior.lockNoun(current: "Replace", candidate: "Preparing", sessionEnded: false) == "Replace", "another status word leaves the lock")
+        precondition(TerminalBehavior.lockNoun(current: corrected, candidate: "Penwork", sessionEnded: false) == "Voice", "the corrected noun then sticks")
+        let typedStatus = TerminalBehavior.lockNoun(current: "Finish", candidate: "Veeze", sessionEnded: false, userNamed: true)
+        precondition(typedStatus == "Finish", "a name you typed stays, even when it is a status word")
+        precondition(TerminalBehavior.lockNoun(current: "", candidate: "Terminal 1", sessionEnded: false).isEmpty, "Terminal 1 is not a noun")
+        precondition(TerminalBehavior.lockNoun(current: "", candidate: "terminal", sessionEnded: false).isEmpty)
+        precondition(TerminalBehavior.lockNoun(current: "Veeze", candidate: "coucou", sessionEnded: true).isEmpty, "a closed terminal clears the noun")
+    }
+
+    /// A short press focuses. Holding the blob tiles it.
+    static func testPressFocusesAndHoldTiles() {
+        precondition(TerminalBehavior.blobPress(held: 0.1) == .focus)
+        precondition(TerminalBehavior.blobPress(held: 0.44) == .focus)
+        precondition(TerminalBehavior.blobPress(held: TerminalBehavior.tileHold) == .tile)
+        precondition(TerminalBehavior.tileHold == 0.45)
+        let view = try! String(contentsOfFile: "NotchBuddy/Sources/App/TerminalNotchView.swift", encoding: .utf8)
+        precondition(view.contains("TerminalBlobPress"), "a press on the blob can focus or tile")
+        precondition(view.contains("onTapGesture(count: 2)"), "double-click the name to change it")
+        precondition(view.contains("lockName"), "a typed name is locked")
+        let open = sourceSlice(view, from: "struct TerminalFaceButton", until: "struct TerminalPageLockButton")
+        precondition(open.contains("case .focus: desk.focus"), "a click brings the window forward")
+        precondition(open.contains("case .tile: desk.openOrFocus"), "a hold puts the window in its corner")
+        let compact = sourceSlice(view, from: "struct CompactTerminalFaces", until: "struct TerminalSettingsSection")
+        precondition(compact.contains("case .focus: desk.focus"), "the closed notch click brings the window forward")
+        precondition(compact.contains("case .tile: desk.openOrFocus"), "the closed notch hold tiles the window")
+    }
+
+    /// Xcode shines purple, Grok blue, Claude orange. Needing input flashes once.
+    static func testToolClaimShinesAndWaitingFlashes() {
+        precondition(TerminalBehavior.sessionTool(title: "samuel — -zsh — 80×24", process: "xcodebuild test") == .xcode)
+        precondition(TerminalBehavior.sessionTool(title: "xed Penwork.xcodeproj") == .xcode)
+        precondition(TerminalBehavior.sessionTool(title: "samuel — claude — 80×24") == .claude)
+        precondition(TerminalBehavior.sessionTool(title: "shell", process: "claude") == .claude)
+        precondition(TerminalBehavior.sessionTool(title: "samuel — grok — grok ▸ python — 80×24") == .grok)
+        precondition(TerminalBehavior.sessionTool(title: "samuel — -zsh — 80×24", process: "-zsh") == nil)
+        precondition(TerminalBehavior.toolShineHex(.xcode) == "#C084FC")
+        precondition(TerminalBehavior.toolShineHex(.grok) == "#3D8BFF")
+        precondition(TerminalBehavior.toolShineHex(.claude) == "#FF9F1C")
+        precondition(TerminalBehavior.attentionFlash(previous: .working, next: .waiting))
+        precondition(TerminalBehavior.attentionFlash(previous: .idle, next: .waiting))
+        precondition(TerminalBehavior.attentionFlash(previous: .waiting, next: .waiting) == false)
+        precondition(TerminalBehavior.attentionFlash(previous: .idle, next: .working) == false)
+        let desk = try! String(contentsOfFile: "NotchBuddy/Sources/App/TerminalDesk.swift", encoding: .utf8)
+        let tick = sourceSlice(desk, from: "private func tick()", until: "private func apply(")
+        precondition(tick.contains("toolShineHex"), "claiming Xcode, Grok, or Claude shines that color")
+        precondition(tick.contains("TerminalFrameFlash"), "a claimed window flashes its blob color")
+        precondition(tick.contains("attentionFlash"), "needing input flashes the blob color in the notch")
+        precondition(tick.contains("acceptPlain"), "plain shells are claimed while Terminal is restoring")
+        precondition(tick.contains("firstWindowsAt"), "an empty listing does not start the restore clock")
+        precondition(tick.contains("userNamed:"), "a name you typed is not replaced")
+        precondition(tick.contains("shellProfile"), "a plain shell takes its blob profile")
+        precondition(tick.contains("useShellProfile"), "claiming a plain shell colors that window")
+        precondition(TerminalBehavior.shellProfile("green") == "Grass")
+        precondition(TerminalBehavior.shellProfile("orange") == "Man Page")
+        precondition(TerminalBehavior.shellProfile("yellow") == "Man Page")
+        precondition(TerminalBehavior.shellProfile("purple") == "Violet")
+        precondition(TerminalBehavior.shellProfile("red") == "Red Sands")
+        precondition(TerminalBehavior.violetBackground == (red: 18000, green: 8000, blue: 28000))
+        precondition(!tick.contains("reflowOpen"), "closing one terminal does not move the others")
+        precondition(!tick.contains("closedOne && didTile"), "a closed terminal does not reflow the desk")
     }
 
     /// A blob keeps the window it opened until that window is gone.
@@ -388,8 +488,10 @@ enum TerminalBehaviorTests {
         let tick = sourceSlice(desk, from: "private func tick()", until: "private func apply(")
         precondition(tick.contains("marriedWindow"), "a tick keeps the window the blob opened")
         precondition(tick.contains("classify(title:"), "each blob reads its own window title")
-        precondition(tick.contains("claimStartupWindows"), "a free blob claims a terminal that was already open")
-        precondition(tick.contains("startupSessions"), "a tick remembers the terminals open when Coucou started")
+        precondition(tick.contains("claimFreeWindows"), "a free blob claims a restored terminal, or Xcode, Grok, or Claude")
+        precondition(tick.contains("startupGrace"), "Coucou keeps looking after an empty start")
+        precondition(tick.contains("lockNoun"), "the first noun stays until that terminal closes")
+        precondition(!tick.contains("reflowOpen"), "closing one terminal leaves the other frames alone")
         let view = try! String(contentsOfFile: "NotchBuddy/Sources/App/TerminalNotchView.swift", encoding: .utf8)
         let compact = sourceSlice(view, from: "struct CompactTerminalFaces", until: "struct TerminalSettingsSection")
         precondition(compact.contains("statusColorHex"), "each compact blob shows its own status light")

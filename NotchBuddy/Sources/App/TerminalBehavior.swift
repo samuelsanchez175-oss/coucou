@@ -175,6 +175,8 @@ enum TerminalBehavior {
         var bounds: TerminalBounds? = nil
         /// tty of the selected tab. Empty when the listing did not include one.
         var tty: String = ""
+        /// Command line on that tty. Empty when it was not read.
+        var process: String = ""
     }
 
     /// A Terminal window Coucou can recognize by the corner it was tiled into.
@@ -189,12 +191,6 @@ enum TerminalBehavior {
         var tty: String
     }
 
-    /// A terminal that was already open when Coucou started looking.
-    struct StartupWindow: Equatable, Sendable {
-        var id: Int
-        var tty: String
-    }
-
     /// One blob and the terminal it currently owns.
     struct ClaimSlot: Equatable {
         var id: String
@@ -202,8 +198,106 @@ enum TerminalBehavior {
         var tty: String
     }
 
-    /// How long Coucou keeps looking for terminals that were already open, in seconds.
+    /// Hold at least this long to tile. A shorter press only brings the window forward.
+    static let tileHold: TimeInterval = 0.45
+
+    /// Plain shells stay claimable this long after the first window appears.
+    /// The clock does not start while the list is empty, so a late Terminal restore is still claimed.
     static let startupGrace: TimeInterval = 8
+
+    enum BlobPress: Equatable {
+        case focus, tile
+    }
+
+    /// A short press focuses. A hold tiles that window into its corner.
+    static func blobPress(held: TimeInterval) -> BlobPress {
+        held >= tileHold ? .tile : .focus
+    }
+
+    enum SessionTool: Equatable {
+        case xcode, grok, claude
+    }
+
+    /// Xcode, Grok, or Claude, from the window title or the process on its tty.
+    static func sessionTool(title: String, process: String = "") -> SessionTool? {
+        let blob = (title + " " + process).lowercased()
+        if blob.contains("xcode") || blob.contains("xed") { return .xcode }
+        if blob.contains("claude") { return .claude }
+        if blob.contains("grok") { return .grok }
+        return nil
+    }
+
+    /// A plain shell uses the Terminal profile that reads as that blob.
+    /// Violet is Grass shifted purple. Terminal has no built-in purple profile.
+    static func shellProfile(_ slotID: String) -> String {
+        switch slotID {
+        case "orange", "yellow": return "Man Page"
+        case "purple": return "Violet"
+        case "red": return "Red Sands"
+        default: return "Grass"
+        }
+    }
+
+    /// Background and text for the Violet profile, in Terminal's 0...65535 color scale.
+    static let violetBackground = (red: 18000, green: 8000, blue: 28000)
+    static let violetText = (red: 58000, green: 54000, blue: 65535)
+
+    /// Purple for Xcode, blue for Grok, orange for Claude Code.
+    static func toolShineHex(_ tool: SessionTool) -> String {
+        switch tool {
+        case .xcode: return "#C084FC"
+        case .grok: return "#3D8BFF"
+        case .claude: return "#FF9F1C"
+        }
+    }
+
+    /// The notch flashes the blob's own color once, when that session starts needing input.
+    static func attentionFlash(previous: Face, next: Face) -> Bool {
+        next == .waiting && previous != .waiting
+    }
+
+    /// The first good noun stays. A closed terminal clears it. "Terminal 1" is not a noun.
+    /// A leftover status word such as Finish or Replace gives way once, to the next topic noun.
+    /// A name the user typed stays.
+    static func lockNoun(
+        current: String,
+        candidate: String,
+        sessionEnded: Bool,
+        userNamed: Bool = false
+    ) -> String {
+        if sessionEnded { return "" }
+        let kept = current.trimmingCharacters(in: .whitespacesAndNewlines)
+        let next = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !kept.isEmpty {
+            if userNamed || !isWeakLock(kept) { return kept }
+            if next.isEmpty || isPlaceholderName(next) || isWeakLock(next) { return kept }
+            return next
+        }
+        if next.isEmpty || isPlaceholderName(next) { return "" }
+        return next
+    }
+
+    /// Status words Grok leaves in the title before the topic arrives.
+    private static func isWeakLock(_ name: String) -> Bool {
+        let weak: Set<String> = [
+            "finish", "finished", "finishing", "replace", "replaced", "replacing",
+            "prepare", "prepared", "preparing", "running", "thinking", "responding",
+            "waiting", "done", "reading", "compacting", "retrying", "searching",
+            "working", "starting", "stopping", "loading", "processing", "complete",
+            "completed", "ready", "paused", "pending", "cancelled", "canceled",
+            "successful", "failed", "required", "approval", "indexing", "compiling",
+            "building", "installing", "updating", "progress", "progressing", "action",
+        ]
+        return weak.contains(name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+    }
+
+    static func isPlaceholderName(_ name: String) -> Bool {
+        let lower = name.lowercased()
+        if lower == "terminal" { return true }
+        guard lower.hasPrefix("terminal ") else { return false }
+        let rest = lower.dropFirst("terminal ".count)
+        return !rest.isEmpty && rest.allSatisfy(\.isNumber)
+    }
 
     /// The window this blob is married to.
     /// A failed listing keeps the saved id. The same tty with a new id is the same terminal.
@@ -228,45 +322,39 @@ enum TerminalBehavior {
         return Marriage(windowID: nil, terminated: false)
     }
 
-    /// The first already-open terminal that no blob owns.
-    /// A window that was not open at launch is left alone. The same tty with a new id still counts.
-    static func startupWindow(
-        open: [ListedWindow],
-        startup: [StartupWindow],
-        takenIDs: Set<Int>,
-        takenTTYs: Set<String>
-    ) -> ListedWindow? {
-        let startupIDs = Set(startup.map(\.id))
-        let startupTTYs = Set(startup.map { $0.tty.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })
-        return open.first { window in
-            if takenIDs.contains(window.id) { return false }
-            let tty = window.tty.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !tty.isEmpty, takenTTYs.contains(tty) { return false }
-            let knownID = startupIDs.contains(window.id)
-            let knownTTY = !tty.isEmpty && startupTTYs.contains(tty)
-            return knownID || knownTTY
-        }
-    }
-
-    /// Free blobs take terminals that were already open. An assigned blob keeps its window.
-    static func claimStartupWindows(
+    /// Free blobs take an unclaimed terminal. An assigned blob keeps its window.
+    /// Xcode, Grok, and Claude are taken first, whenever a blob is free.
+    /// A plain shell fills a color that is still free, and only while Terminal is
+    /// still restoring (`acceptPlain`).
+    static func claimFreeWindows(
         slots: [ClaimSlot],
         open: [ListedWindow],
-        startup: [StartupWindow],
-        freeIDs: Set<String>
+        freeIDs: Set<String>,
+        acceptPlain: Bool
     ) -> [ClaimSlot] {
         var slots = slots
-        for index in slots.indices {
-            guard freeIDs.contains(slots[index].id), slots[index].windowID == nil else { continue }
-            let ownTTY = slots[index].tty.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard ownTTY.isEmpty else { continue }
-            let takenIDs = Set(slots.compactMap(\.windowID))
-            let takenTTYs = Set(slots.map { $0.tty.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })
-            guard let found = startupWindow(open: open, startup: startup, takenIDs: takenIDs, takenTTYs: takenTTYs) else { continue }
-            slots[index].windowID = found.id
-            if !found.tty.isEmpty { slots[index].tty = found.tty }
-        }
+        claim(toolsOnly: true)
+        if acceptPlain { claim(toolsOnly: false) }
         return slots
+
+        func claim(toolsOnly: Bool) {
+            for index in slots.indices {
+                guard freeIDs.contains(slots[index].id), slots[index].windowID == nil else { continue }
+                let ownTTY = slots[index].tty.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard ownTTY.isEmpty else { continue }
+                let takenIDs = Set(slots.compactMap(\.windowID))
+                let takenTTYs = Set(slots.map { $0.tty.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })
+                guard let found = open.first(where: { window in
+                    if takenIDs.contains(window.id) { return false }
+                    let tty = window.tty.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !tty.isEmpty, takenTTYs.contains(tty) { return false }
+                    let isTool = sessionTool(title: window.title, process: window.process) != nil
+                    return toolsOnly ? isTool : !isTool
+                }) else { continue }
+                slots[index].windowID = found.id
+                if !found.tty.isEmpty { slots[index].tty = found.tty }
+            }
+        }
     }
 
     /// How far a tiled window may sit from the corner Coucou gave it, in points.

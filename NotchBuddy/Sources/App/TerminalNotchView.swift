@@ -79,20 +79,19 @@ struct TerminalFaceButton: View {
         let selected = desk.selectedID == slot.id
         let face = desk.faces[slot.id] ?? .idle
         let reading = behaviorFace(face)
-        let name = TerminalBehavior.shortTitle(desk.displayName(slot.id), fallback: slot.name)
+        let name = blobLabel(slot, desk: desk)
         let phrase = TerminalBehavior.statusPhrase(for: reading)
-        Button {
-            switch TerminalBehavior.blobClick(slotID: slot.id, selectedID: desk.selectedID) {
-            case .focus:
+        VStack(spacing: 2) {
+            TerminalBlobPress { press in
                 desk.cancelAsk()
-                desk.openOrFocus(slot.id)
-            case .askAttach:
-                desk.beginAsk(slot.id)
-            }
-        } label: {
-            VStack(spacing: 2) {
+                switch press {
+                case .focus: desk.focus(slot.id)
+                case .tile: desk.openOrFocus(slot.id)
+                }
+            } label: {
                 ZStack {
                     workingGlow(active: TerminalBehavior.showsWorkingGlow(reading), diameter: 46, blur: 9)
+                    attentionShine(slotID: slot.id, color: slot.color, shines: desk.shines, diameter: 46)
                     MiniBotCanvasView(task: faceTask(slot, face))
                         .frame(width: 28 / 0.6, height: 28 / 0.6)
                 }
@@ -105,24 +104,20 @@ struct TerminalFaceButton: View {
                         )
                         .padding(1)
                 }
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(Color(hex: TerminalBehavior.statusColorHex(for: reading)))
-                        .frame(width: 6, height: 6)
-                        .accessibilityHidden(true)
-                    Text(name)
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(selected ? Color.white : Color(hex: "#C8CCD2"))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
-                        .allowsTightening(true)
-                }
             }
-            .frame(maxWidth: .infinity)
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(Color(hex: TerminalBehavior.statusColorHex(for: reading)))
+                    .frame(width: 6, height: 6)
+                    .accessibilityHidden(true)
+                TerminalNameLabel(slotID: slot.id, name: name, selected: selected, desk: desk)
+            }
         }
-        .buttonStyle(.plain)
-        .help("\(name). \(phrase). Opens this terminal in the \(TerminalBehavior.cornerPhrase(slot.id)). Drop a file here to attach it to this chat.")
-        .accessibilityLabel("\(name). \(phrase). Opens in the \(TerminalBehavior.cornerPhrase(slot.id)). Drop a file to attach it.")
+        .frame(maxWidth: .infinity)
+        .help("\(name). \(phrase). Click brings this terminal forward. Hold to put it in the \(TerminalBehavior.cornerPhrase(slot.id)). Double-click the name to change it. Drop a file here to attach it to this chat.")
+        .accessibilityLabel("\(name). \(phrase). Click brings it forward. Hold puts it in the \(TerminalBehavior.cornerPhrase(slot.id)).")
+        .accessibilityAction { desk.focus(slot.id) }
+        .accessibilityAction(named: "Tile") { desk.openOrFocus(slot.id) }
     }
 
     private func ringColor(selected: Bool, asking: Bool, dropping: Bool) -> Color {
@@ -323,20 +318,19 @@ struct CompactTerminalFaces: View {
             ForEach(desk.slots) { slot in
                 let face = desk.faces[slot.id] ?? .idle
                 let reading = behaviorFace(face)
-                let name = TerminalBehavior.shortTitle(desk.displayName(slot.id), fallback: slot.name)
+                let name = blobLabel(slot, desk: desk)
                 let phrase = TerminalBehavior.statusPhrase(for: reading)
-                Button {
+                TerminalBlobPress { press in
                     desk.armSelection(slot.id)
-                    switch TerminalBehavior.blobClick(slotID: slot.id, selectedID: desk.selectedID) {
-                    case .focus:
-                        desk.cancelAsk()
-                        desk.openOrFocus(slot.id)
-                    case .askAttach:
-                        desk.beginAsk(slot.id)
+                    desk.cancelAsk()
+                    switch press {
+                    case .focus: desk.focus(slot.id)
+                    case .tile: desk.openOrFocus(slot.id)
                     }
                 } label: {
                     ZStack {
                         workingGlow(active: TerminalBehavior.showsWorkingGlow(reading), diameter: 18, blur: 3.5)
+                        attentionShine(slotID: slot.id, color: slot.color, shines: desk.shines, diameter: 22)
                         MiniBotCanvasView(task: faceTask(slot, face))
                             .frame(width: 12 / 0.6, height: 12 / 0.6)
                     }
@@ -349,8 +343,7 @@ struct CompactTerminalFaces: View {
                                 .accessibilityHidden(true)
                         }
                 }
-                .buttonStyle(.plain)
-                .help("\(name). \(phrase). Opens this terminal in the \(TerminalBehavior.cornerPhrase(slot.id)).")
+                .help("\(name). \(phrase). Click brings this terminal forward. Hold to put it in the \(TerminalBehavior.cornerPhrase(slot.id)).")
                 .accessibilityLabel("\(name). \(phrase). Opens in the \(TerminalBehavior.cornerPhrase(slot.id)).")
             }
         }
@@ -365,7 +358,7 @@ struct TerminalSettingsSection: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Terminals")
                 .font(.system(size: 13, weight: .semibold))
-            Text("Green is the top left, yellow the top right, purple the bottom left, and red the bottom right. Each one opens in that corner, and the little cuddler matches that terminal. The name is the noun from the terminal title. The dot is orange when idle, blue when a new response is available, and purple when it needs your input. Hold this page open keeps it up for 20 seconds after the pointer leaves, and the lock opens during the last 3 seconds. Drop a file on a color to attach it to that chat. An empty folder uses your home folder.")
+            Text("Green is the top left, yellow the top right, purple the bottom left, and red the bottom right. Click a color to bring its terminal forward. Hold it to put that window in its corner. The name stays on the first topic word until that terminal closes. A leftover word such as Finish or Replace changes once when a real name shows up. A name you type stays. Double-click the name to change it. The dot is orange when idle, blue when a new response is available, and purple when it needs your input. A blob with no terminal takes Xcode, Grok, or Claude before a plain shell, and the notch flashes that tool’s color. A plain shell turns Grass for green, Man Page for yellow, Violet for purple, and Red Sands for red. A window that comes back after Coucou starts is claimed too. Closing one terminal leaves the other windows where they are. Hold this page open keeps it up for 20 seconds after the pointer leaves, and the lock opens during the last 3 seconds. Drop a file on a color to attach it to that chat. An empty folder uses your home folder.")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -422,6 +415,28 @@ struct TerminalSettingsSection: View {
     }
 }
 
+@MainActor
+private func blobLabel(_ slot: TerminalSlot, desk: TerminalDesk) -> String {
+    let raw = desk.displayName(slot.id)
+    let locked = !slot.lockedName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    if locked { return raw }
+    return TerminalBehavior.shortTitle(raw, fallback: slot.name)
+}
+
+@ViewBuilder
+private func attentionShine(slotID: String, color: String, shines: [String: BlobShine], diameter: CGFloat) -> some View {
+    let shine = shines[slotID]
+    TimelineView(.animation(minimumInterval: 1.0 / 15.0)) { context in
+        let on = shine.map { $0.until > context.date } ?? false
+        Circle()
+            .fill(Color(hex: shine?.hex ?? color))
+            .frame(width: diameter, height: diameter)
+            .blur(radius: 8)
+            .opacity(on ? 0.9 : 0)
+            .accessibilityHidden(true)
+    }
+}
+
 private func behaviorFace(_ face: TerminalFace) -> TerminalBehavior.Face {
     switch face {
     case .idle: return .idle
@@ -441,6 +456,70 @@ private func faceTask(_ slot: TerminalSlot, _ face: TerminalFace) -> AgentTask {
         isIntegration: true,
         holdSlotColor: true
     )
+}
+
+/// A short press focuses. A hold tiles the window into its corner.
+struct TerminalBlobPress<Label: View>: View {
+    var onPress: (TerminalBehavior.BlobPress) -> Void
+    @ViewBuilder var label: () -> Label
+    @State private var began: Date?
+
+    var body: some View {
+        label()
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in
+                        if began == nil { began = Date() }
+                    }
+                    .onEnded { _ in
+                        let held = Date().timeIntervalSince(began ?? Date())
+                        began = nil
+                        onPress(TerminalBehavior.blobPress(held: held))
+                    }
+            )
+    }
+}
+
+/// Double-click the name, type, and press Return. The spelling stays until that terminal closes.
+struct TerminalNameLabel: View {
+    let slotID: String
+    let name: String
+    let selected: Bool
+    @ObservedObject var desk: TerminalDesk
+    @State private var editing = false
+    @State private var draft = ""
+
+    var body: some View {
+        if editing {
+            TextField("Name", text: $draft)
+                .font(.system(size: 10, weight: .semibold))
+                .textFieldStyle(.plain)
+                .frame(maxWidth: 72)
+                .onSubmit { commit() }
+                .onExitCommand { editing = false }
+                .onAppear { draft = name }
+        } else {
+            Text(name)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(selected ? Color.white : Color(hex: "#C8CCD2"))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .allowsTightening(true)
+                .onTapGesture(count: 2) {
+                    draft = name
+                    editing = true
+                }
+        }
+    }
+
+    private func commit() {
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            desk.lockName(slotID, trimmed)
+        }
+        editing = false
+    }
 }
 
 /// Blue halo behind a busy blob. Drawn before the figure, so the character covers the middle.

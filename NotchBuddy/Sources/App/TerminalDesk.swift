@@ -22,6 +22,11 @@ enum TerminalFace: String {
     }
 }
 
+struct BlobShine: Equatable {
+    var hex: String
+    var until: Date
+}
+
 struct TerminalSlot: Identifiable, Equatable {
     var id: String
     var name: String
@@ -30,6 +35,8 @@ struct TerminalSlot: Identifiable, Equatable {
     var windowID: Int?
     /// tty of the selected tab. This stays put when Terminal replaces the window id.
     var tty: String = ""
+    /// Noun kept for this session. Empty until the first good title, or a name you type.
+    var lockedName: String = ""
 }
 
 private struct StoredTerminal: Codable {
@@ -38,6 +45,7 @@ private struct StoredTerminal: Codable {
     var folder: String
     var windowID: Int?
     var tty: String?
+    var lockedName: String?
 }
 
 /// Four fixed Terminal.app sessions, one per notch color.
@@ -65,25 +73,24 @@ final class TerminalDesk: ObservableObject {
     @Published var lockLeftAt: Date?
     /// Color the file drag is currently over.
     @Published var dropSlotID: String?
+    /// A short color flash on a blob. The hex is the slot color, or the tool color after a claim.
+    @Published var shines: [String: BlobShine] = [:]
 
     private var loop: Task<Void, Never>?
     private var ghostTask: Task<Void, Never>?
     private var armedSlot: String?
     private var armedAt: Date?
-    /// True after a blob has tiled the open windows, so a later close can reflow them.
-    private var didTile = false
     /// Frames from the last listing, so a press can focus the window already in that corner.
     private var rememberedCorners: [TerminalBehavior.CornerWindow] = []
     /// Sessions from the last listing that Terminal actually returned.
     private var liveSessions: [TerminalBehavior.LiveSession] = []
     private var liveListIsCurrent = false
-    /// Terminals already open when Coucou started. Nil until that first look settles.
-    private var startupSessions: [TerminalBehavior.StartupWindow]?
-    private var launchWatch = Date()
     /// A place is moving tabs. The window id changes before the new one is saved.
     private var placeInFlight = 0
     /// Bumps when a place starts, so a listing taken during that move is not trusted to divorce a blob.
     private var placeGeneration = 0
+    /// When the first Terminal window was listed. Plain shells stay claimable for startupGrace after this.
+    private var firstWindowsAt: Date?
     private let defaults = UserDefaults.standard
     private let storeKey = "nook.terminals"
 
@@ -98,7 +105,8 @@ final class TerminalDesk: ObservableObject {
                 color: item.color,
                 folder: prior?.folder ?? "",
                 windowID: prior?.windowID,
-                tty: prior?.tty ?? ""
+                tty: prior?.tty ?? "",
+                lockedName: prior?.lockedName ?? ""
             )
         }
         for slot in slots { faces[slot.id] = .idle }
@@ -113,9 +121,12 @@ final class TerminalDesk: ObservableObject {
 
     var selected: TerminalSlot? { slots.first { $0.id == selectedID } ?? slots.first }
 
-    /// The title on the Terminal window, or the saved name before a window exists.
+    /// The locked noun, or the title on the Terminal window, or the saved name before a window exists.
     func displayName(_ id: String) -> String {
-        let fallback = slots.first { $0.id == id }?.name ?? "Terminal"
+        let slot = slots.first { $0.id == id }
+        let locked = slot?.lockedName.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !locked.isEmpty { return locked }
+        let fallback = slot?.name ?? "Terminal"
         guard let title = titles[id] else { return fallback }
         return TerminalBehavior.adoptedName(windowTitle: title, fallback: fallback)
     }
@@ -149,9 +160,20 @@ final class TerminalDesk: ObservableObject {
     func select(_ id: String) { selectedID = id }
 
     func setName(_ id: String, _ name: String) {
+        lockName(id, name)
+    }
+
+    /// Keeps this spelling on the blob until that terminal closes.
+    func lockName(_ id: String, _ name: String) {
         guard let index = slots.firstIndex(where: { $0.id == id }) else { return }
-        slots[index].name = name
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        slots[index].name = trimmed.isEmpty ? slots[index].name : trimmed
+        slots[index].lockedName = trimmed
         save()
+    }
+
+    func shine(_ id: String, hex: String) {
+        shines[id] = BlobShine(hex: hex, until: Date().addingTimeInterval(1.2))
     }
 
     func setFolder(_ id: String, _ folder: String) {
@@ -296,6 +318,18 @@ final class TerminalDesk: ObservableObject {
         ).windowID
     }
 
+    /// Bring the married window forward. The frame stays where it is.
+    func focus(_ id: String) {
+        select(id)
+        guard let slot = slots.first(where: { $0.id == id }) else { return }
+        guard let windowID = resolvedWindowID(slot) else { return }
+        Task {
+            await Task.detached {
+                TerminalBridge.focus(windowID)
+            }.value
+        }
+    }
+
     func openOrFocus(_ id: String) {
         select(id)
         guard let slot = slots.first(where: { $0.id == id }) else { return }
@@ -314,7 +348,6 @@ final class TerminalDesk: ObservableObject {
             guard other.id != id, let wid = other.windowID, let frame = layout[other.id] else { return nil }
             return (wid, frame)
         }
-        didTile = true
         let focusID = windowID
         beginPlace()
         Task {
@@ -375,7 +408,6 @@ final class TerminalDesk: ObservableObject {
             endPlace()
             apply(id, outcome)
             if !hadWindow, outcome.windowID != nil {
-                didTile = true
                 reflowOpen(focus: outcome.windowID ?? 0)
             }
             if outcome.ok {
@@ -407,7 +439,6 @@ final class TerminalDesk: ObservableObject {
             endPlace()
             apply(id, outcome)
             if !hadWindow, outcome.windowID != nil {
-                didTile = true
                 reflowOpen(focus: outcome.windowID ?? 0)
             }
             if outcome.ok {
@@ -443,22 +474,18 @@ final class TerminalDesk: ObservableObject {
         if snapshot.listed {
             liveSessions = snapshot.windows.map { TerminalBehavior.LiveSession(id: $0.id, tty: $0.tty) }
             liveListIsCurrent = true
-            if startupSessions == nil {
-                let aged = Date().timeIntervalSince(launchWatch) >= TerminalBehavior.startupGrace
-                if !snapshot.windows.isEmpty || aged {
-                    startupSessions = snapshot.windows.map {
-                        TerminalBehavior.StartupWindow(id: $0.id, tty: $0.tty)
-                    }
-                }
-            }
         }
+        let ttyList = snapshot.listed ? snapshot.windows.map(\.tty) : []
+        let commands = await Task.detached {
+            Self.commandsByTTY(ttyList)
+        }.value
         let sessions = liveSessions
         let corners = cornerWindows(in: snapshot)
         let quadrants = cornerFrames()
         var nextTitles: [String: String] = [:]
-        var closedOne = false
-        var resolved: [(windowID: Int?, tty: String, ended: Bool, originalID: Int?)] = []
+        var resolved: [(windowID: Int?, tty: String, ended: Bool, originalID: Int?, droppedSession: Bool)] = []
         var seenIDs: [Int?] = slots.map(\.windowID)
+        var freshlyClaimed: Set<String> = []
         for (index, slot) in slots.enumerated() {
             let originalID = slots[index].windowID
             let link = TerminalBehavior.marriedWindow(
@@ -470,9 +497,11 @@ final class TerminalDesk: ObservableObject {
             var windowID = link.windowID
             var tty = slots[index].tty
             var ended = link.terminated
+            var droppedSession = link.terminated
             if ended && placeMoved {
                 ended = false
                 windowID = originalID
+                droppedSession = false
             }
             if windowID == nil, snapshot.listed, let quadrant = quadrants[slot.id] {
                 let taken = Set(seenIDs.enumerated().compactMap { offset, item in
@@ -481,15 +510,22 @@ final class TerminalDesk: ObservableObject {
                 if let adopted = TerminalBehavior.windowInCorner(quadrant: quadrant, windows: corners, taken: taken) {
                     windowID = adopted
                     ended = false
+                    freshlyClaimed.insert(slot.id)
                     if let found = snapshot.windows.first(where: { $0.id == adopted }), !found.tty.isEmpty {
                         tty = found.tty
                     }
                 }
             }
             seenIDs[index] = windowID
-            resolved.append((windowID, tty, ended, originalID))
+            resolved.append((windowID, tty, ended, originalID, droppedSession))
         }
-        if snapshot.listed, let startup = startupSessions {
+        if snapshot.listed {
+            if !snapshot.windows.isEmpty, firstWindowsAt == nil {
+                firstWindowsAt = Date()
+            }
+            let acceptPlain = firstWindowsAt.map {
+                Date().timeIntervalSince($0) < TerminalBehavior.startupGrace
+            } ?? true
             let picture = resolved.enumerated().map { index, row in
                 TerminalBehavior.ClaimSlot(
                     id: slots[index].id,
@@ -500,13 +536,20 @@ final class TerminalDesk: ObservableObject {
             let freeIDs = Set(resolved.enumerated().compactMap { index, row in
                 row.windowID == nil ? slots[index].id : nil
             })
-            let claimed = TerminalBehavior.claimStartupWindows(
+            let claimed = TerminalBehavior.claimFreeWindows(
                 slots: picture,
-                open: snapshot.windows.map {
-                    TerminalBehavior.ListedWindow(id: $0.id, title: $0.title, bounds: $0.bounds, tty: $0.tty)
+                open: snapshot.windows.map { window in
+                    let ttyName = (window.tty as NSString).lastPathComponent
+                    return TerminalBehavior.ListedWindow(
+                        id: window.id,
+                        title: window.title,
+                        bounds: window.bounds,
+                        tty: window.tty,
+                        process: commands[ttyName] ?? ""
+                    )
                 },
-                startup: startup,
-                freeIDs: freeIDs
+                freeIDs: freeIDs,
+                acceptPlain: acceptPlain
             )
             for index in resolved.indices where resolved[index].windowID == nil {
                 if let adopted = claimed[index].windowID {
@@ -514,6 +557,7 @@ final class TerminalDesk: ObservableObject {
                     resolved[index].ended = false
                     let claimedTTY = claimed[index].tty.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !claimedTTY.isEmpty { resolved[index].tty = claimedTTY }
+                    freshlyClaimed.insert(slots[index].id)
                 }
             }
         }
@@ -524,16 +568,19 @@ final class TerminalDesk: ObservableObject {
             var ended = row.ended
             let originalID = row.originalID
             if ended {
-                if originalID != nil {
-                    closedOne = true
-                }
                 windowID = nil
                 tty = ""
                 faces[slot.id] = .idle
+                releaseSessionName(index)
+            } else if row.droppedSession {
+                releaseSessionName(index)
+                if let windowID, let found = snapshot.windows.first(where: { $0.id == windowID }), !found.tty.isEmpty {
+                    tty = found.tty
+                }
             } else if let windowID, let found = snapshot.windows.first(where: { $0.id == windowID }), !found.tty.isEmpty {
                 tty = found.tty
             }
-            if slots[index].windowID != windowID || slots[index].tty != tty {
+            if slots[index].windowID != windowID || slots[index].tty != tty || slots[index].lockedName != slot.lockedName || slots[index].name != slot.name {
                 slots[index].windowID = windowID
                 slots[index].tty = tty
                 save()
@@ -544,10 +591,43 @@ final class TerminalDesk: ObservableObject {
             }
             let title = TerminalBehavior.adoptedName(windowTitle: found.title, fallback: slot.name)
             nextTitles[slot.id] = title
+            let ttyName = (found.tty as NSString).lastPathComponent
+            let noun = TerminalBehavior.shortTitle(found.title, fallback: "")
+            let restingName = Self.palette.first { $0.id == slots[index].id }?.name ?? ""
+            let userNamed = slots[index].name != restingName
+            let locked = TerminalBehavior.lockNoun(
+                current: slots[index].lockedName,
+                candidate: noun,
+                sessionEnded: false,
+                userNamed: userNamed
+            )
+            if locked != slots[index].lockedName {
+                slots[index].lockedName = locked
+                save()
+            }
+            if freshlyClaimed.contains(slot.id) {
+                if let bounds = found.bounds {
+                    TerminalFrameFlash.show(bounds: bounds, hex: slot.color)
+                }
+                if let tool = TerminalBehavior.sessionTool(title: found.title, process: commands[ttyName] ?? "") {
+                    shine(slot.id, hex: TerminalBehavior.toolShineHex(tool))
+                } else {
+                    let profile = TerminalBehavior.shellProfile(slot.id)
+                    let tinted = windowID
+                    Task.detached {
+                        TerminalBridge.useShellProfile(tinted, profile: profile)
+                    }
+                }
+            }
             var raw = index < snapshot.tails.count ? snapshot.tails[index] : ""
             if windowID != originalID, raw == "missing" { raw = "" }
             let read = TerminalRead.classify(title: title, contents: raw)
+            let prior = behaviorFace(faces[slot.id] ?? .idle)
             faces[slot.id] = read.face
+            if TerminalBehavior.attentionFlash(previous: prior, next: behaviorFace(read.face)),
+               !freshlyClaimed.contains(slot.id) {
+                shine(slot.id, hex: slot.color)
+            }
             if read.grokMissing {
                 notes[slot.id] = "Grok CLI not found"
             } else if notes[slot.id] == "Grok CLI not found" {
@@ -555,7 +635,6 @@ final class TerminalDesk: ObservableObject {
             }
         }
         if snapshot.listed { titles = nextTitles }
-        if closedOne && didTile { reflowOpen(focus: 0) }
         accessibilityOff = !AXIsProcessTrusted()
         if promptFocused, !draft.isEmpty, ghost.isEmpty {
             ghost = CotypistLink.suggestion(after: draft)
@@ -688,6 +767,69 @@ final class TerminalDesk: ObservableObject {
         )
     }
 
+    /// The next session can take a new noun. The resting label is the color's own name.
+    private func releaseSessionName(_ index: Int) {
+        let id = slots[index].id
+        slots[index].lockedName = TerminalBehavior.lockNoun(
+            current: slots[index].lockedName,
+            candidate: "",
+            sessionEnded: true
+        )
+        if let resting = Self.palette.first(where: { $0.id == id })?.name {
+            slots[index].name = resting
+        }
+    }
+
+    private func behaviorFace(_ face: TerminalFace) -> TerminalBehavior.Face {
+        switch face {
+        case .idle: return .idle
+        case .working: return .working
+        case .waiting: return .waiting
+        }
+    }
+
+    /// Processes on the listed ttys, so a shell title can still show Xcode, Grok, or Claude.
+    /// A full process list can stall, so this asks only for those ttys and gives up quickly.
+    nonisolated private static func commandsByTTY(_ ttys: [String]) -> [String: String] {
+        let names = Array(Set(ttys.map { ($0 as NSString).lastPathComponent }.filter { !$0.isEmpty && $0 != "??" && $0 != "-" }))
+        guard !names.isEmpty else { return [:] }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/ps")
+        var args = ["-o", "tty=,command="]
+        for name in names {
+            args.append("-t")
+            args.append(name)
+        }
+        process.arguments = args
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+        } catch {
+            return [:]
+        }
+        let deadline = Date().addingTimeInterval(0.4)
+        while process.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        if process.isRunning {
+            process.terminate()
+            return [:]
+        }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        guard let text = String(data: data, encoding: .utf8) else { return [:] }
+        var map: [String: String] = [:]
+        for line in text.split(whereSeparator: \.isNewline) {
+            let parts = line.split(maxSplits: 1, whereSeparator: \.isWhitespace)
+            guard parts.count == 2 else { continue }
+            let tty = String(parts[0])
+            if tty == "??" || tty == "-" { continue }
+            map[tty, default: ""] += " " + parts[1]
+        }
+        return map
+    }
+
     private func launchCotypistIfNeeded() {
         let id = "app.cotypist.Cotypist"
         if NSWorkspace.shared.runningApplications.contains(where: { $0.bundleIdentifier == id }) { return }
@@ -696,7 +838,14 @@ final class TerminalDesk: ObservableObject {
 
     private func save() {
         let stored = slots.map {
-            StoredTerminal(id: $0.id, name: $0.name, folder: $0.folder, windowID: $0.windowID, tty: $0.tty.isEmpty ? nil : $0.tty)
+            StoredTerminal(
+                id: $0.id,
+                name: $0.name,
+                folder: $0.folder,
+                windowID: $0.windowID,
+                tty: $0.tty.isEmpty ? nil : $0.tty,
+                lockedName: $0.lockedName.isEmpty ? nil : $0.lockedName
+            )
         }
         if let data = try? JSONEncoder().encode(stored) {
             defaults.set(data, forKey: storeKey)
@@ -707,6 +856,61 @@ final class TerminalDesk: ObservableObject {
         guard let data = defaults.data(forKey: key),
               let stored = try? JSONDecoder().decode([StoredTerminal].self, from: data) else { return [] }
         return stored
+    }
+}
+
+/// A one-time colored edge on the Terminal window Coucou just claimed.
+@MainActor
+enum TerminalFrameFlash {
+    private static var panels: [NSPanel] = []
+
+    static func show(bounds: TerminalBehavior.TerminalBounds, hex: String) {
+        let screen = NSScreen.screens.first { $0.frame.origin == .zero } ?? NSScreen.main
+        let height = screen?.frame.height ?? 0
+        let width = CGFloat(bounds.right - bounds.left)
+        let frameHeight = CGFloat(bounds.bottom - bounds.top)
+        guard width > 2, frameHeight > 2 else { return }
+        let rect = NSRect(
+            x: CGFloat(bounds.left),
+            y: height - CGFloat(bounds.bottom),
+            width: width,
+            height: frameHeight
+        )
+        let panel = NSPanel(contentRect: rect, styleMask: .borderless, backing: .buffered, defer: false)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.ignoresMouseEvents = true
+        panel.level = .statusBar
+        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
+        panel.isReleasedWhenClosed = false
+        let stroke = NSView(frame: NSRect(origin: .zero, size: rect.size))
+        stroke.wantsLayer = true
+        let ink = nsColor(hex)
+        stroke.layer?.backgroundColor = ink.withAlphaComponent(0.16).cgColor
+        stroke.layer?.borderColor = ink.cgColor
+        stroke.layer?.borderWidth = 5
+        stroke.layer?.cornerRadius = 12
+        panel.contentView = stroke
+        panel.orderFrontRegardless()
+        panels.append(panel)
+        Task {
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            panel.orderOut(nil)
+            panels.removeAll { $0 === panel }
+        }
+    }
+
+    private static func nsColor(_ hex: String) -> NSColor {
+        var value: UInt64 = 0
+        let cleaned = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        Scanner(string: cleaned).scanHexInt64(&value)
+        return NSColor(
+            srgbRed: CGFloat((value >> 16) & 0xFF) / 255,
+            green: CGFloat((value >> 8) & 0xFF) / 255,
+            blue: CGFloat(value & 0xFF) / 255,
+            alpha: 1
+        )
     }
 }
 
@@ -1127,7 +1331,40 @@ enum TerminalBridge {
         return placed
     }
 
-    nonisolated private static func focus(_ windowID: Int) -> Bool {
+    /// A plain shell takes Grass, Man Page, Violet, or Red Sands. Tool windows stay as they are.
+    /// Violet is created from Grass the first time a purple shell needs it.
+    nonisolated static func useShellProfile(_ windowID: Int, profile: String) {
+        let background = TerminalBehavior.violetBackground
+        let text = TerminalBehavior.violetText
+        let script = """
+        on run argv
+          set wid to item 1 of argv as integer
+          set profileName to item 2 of argv
+          if application "Terminal" is not running then return "no"
+          tell application "Terminal"
+            if not (exists window id wid) then return "no"
+            if profileName is "Violet" then
+              if not (exists settings set "Violet") then
+                try
+                  duplicate settings set "Grass" to end of settings sets with properties {name:"Violet"}
+                  set background color of settings set "Violet" to {\(background.red), \(background.green), \(background.blue)}
+                  set normal text color of settings set "Violet" to {\(text.red), \(text.green), \(text.blue)}
+                  set bold text color of settings set "Violet" to {\(text.red), \(text.green), \(text.blue)}
+                  set cursor color of settings set "Violet" to {\(text.red), \(text.green), \(text.blue)}
+                end try
+              end if
+            end if
+            try
+              set current settings of selected tab of window id wid to settings set profileName
+            end try
+          end tell
+          return "yes"
+        end run
+        """
+        _ = OSAScript.run(script, args: [String(windowID), profile])
+    }
+
+    nonisolated static func focus(_ windowID: Int) -> Bool {
         let script = """
         on run argv
           set wid to item 1 of argv as integer
