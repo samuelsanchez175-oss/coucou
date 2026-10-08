@@ -75,6 +75,8 @@ final class TerminalDesk: ObservableObject {
     @Published var dropSlotID: String?
     /// A short color flash on a blob. The hex is the slot color, or the tool color after a claim.
     @Published var shines: [String: BlobShine] = [:]
+    /// When a blob started the one-shot hop, glance, and ring.
+    @Published var notices: [String: Date] = [:]
 
     private var loop: Task<Void, Never>?
     private var ghostTask: Task<Void, Never>?
@@ -627,6 +629,7 @@ final class TerminalDesk: ObservableObject {
             if TerminalBehavior.attentionFlash(previous: prior, next: behaviorFace(read.face)),
                !freshlyClaimed.contains(slot.id) {
                 shine(slot.id, hex: slot.color)
+                notices[slot.id] = Date()
             }
             if read.grokMissing {
                 notes[slot.id] = "Grok CLI not found"

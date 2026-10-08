@@ -238,6 +238,8 @@ final class BotEngine: ObservableObject {
     // Look target
     var lookX: CGFloat = 0
     var lookY: CGFloat = 0
+    /// While set, a mini blob looks this way instead of wandering. Nil resumes the wander.
+    var noticeLook: CGPoint? = nil
 
     // Timing
     var lastTime: Double = CACurrentMediaTime()
@@ -685,8 +687,11 @@ final class BotEngine: ObservableObject {
         if state == .sleeping { ty = 0; tp = -0.14 }
         if state == .dizzy    { ty = sin(t * 9) * 0.25 }
 
-        // Mini bots: override look with random wandering (never follows mouse)
-        if isMini && cfg.look == nil && !cfg.scans && state != .sleeping && state != .dizzy {
+        // A notice glance wins over the mini wander, then the eyes face forward.
+        if let noticeLook {
+            ty = noticeLook.x * 0.62
+            tp = noticeLook.y * 0.5
+        } else if isMini && cfg.look == nil && !cfg.scans && state != .sleeping && state != .dizzy {
             if now > miniLookNextTime {
                 miniLookTarget = CGPoint(
                     x: CGFloat.random(in: -0.88...0.88),

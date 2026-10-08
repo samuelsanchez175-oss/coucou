@@ -256,6 +256,79 @@ enum TerminalBehavior {
         next == .waiting && previous != .waiting
     }
 
+    /// One hop, one glance, and one ring. The status dot stays still.
+    struct NoticePose: Equatable {
+        var rise: CGFloat
+        var squashX: CGFloat
+        var squashY: CGFloat
+        var glance: CGFloat
+        var ringScale: CGFloat
+        var ringOpacity: CGFloat
+    }
+
+    struct Glance: Equatable {
+        var x: CGFloat
+        var y: CGFloat
+    }
+
+    /// How far the open-notch figure hops, in points.
+    static let noticeHopOpen: CGFloat = 6
+    /// How far the closed-notch figure hops, in points.
+    static let noticeHopCompact: CGFloat = 3
+
+    /// Rise, squash, glance, and ring at a moment after the blob starts needing input.
+    /// `rise` is 0...1. The eyes stay toward the corner for most of a second, then face forward.
+    static func noticePose(elapsed: TimeInterval) -> NoticePose {
+        let rest = NoticePose(rise: 0, squashX: 1, squashY: 1, glance: 0, ringScale: 1, ringOpacity: 0)
+        guard elapsed >= 0, elapsed < 1 else { return rest }
+        let hopWindow = 0.32
+        let rise: CGFloat = elapsed < hopWindow
+            ? CGFloat(sin(Double.pi * elapsed / hopWindow))
+            : 0
+        let landStart = 0.26
+        let landEnd = 0.48
+        let pinch: CGFloat
+        if elapsed >= landStart, elapsed <= landEnd {
+            let portion = (elapsed - landStart) / (landEnd - landStart)
+            pinch = CGFloat(sin(Double.pi * portion))
+        } else {
+            pinch = 0
+        }
+        let glance: CGFloat
+        if elapsed < 0.12 {
+            glance = CGFloat(elapsed / 0.12)
+        } else if elapsed < 0.7 {
+            glance = 1
+        } else {
+            glance = CGFloat((1 - elapsed) / 0.3)
+        }
+        let ringT = CGFloat(elapsed)
+        return NoticePose(
+            rise: rise,
+            squashX: 1 + 0.16 * pinch,
+            squashY: 1 - 0.18 * pinch,
+            glance: glance,
+            ringScale: 0.55 + 1.25 * ringT,
+            ringOpacity: 0.9 * (1 - ringT)
+        )
+    }
+
+    /// The eyes keep the glance, including the moment they return to center.
+    static func noticeLookActive(elapsed: TimeInterval) -> Bool {
+        elapsed >= 0 && elapsed < 1.15
+    }
+
+    /// Green looks up-left, yellow up-right, purple down-left, red down-right.
+    /// Positive x looks right. Positive y looks up.
+    static func glanceDirection(_ slotID: String) -> Glance {
+        switch slotID {
+        case "orange", "yellow": return Glance(x: 0.85, y: 0.7)
+        case "purple": return Glance(x: -0.85, y: -0.7)
+        case "red": return Glance(x: 0.85, y: -0.7)
+        default: return Glance(x: -0.85, y: 0.7)
+        }
+    }
+
     /// The first good noun stays. A closed terminal clears it. "Terminal 1" is not a noun.
     /// A leftover status word such as Finish or Replace gives way once, to the next topic noun.
     /// A name the user typed stays.

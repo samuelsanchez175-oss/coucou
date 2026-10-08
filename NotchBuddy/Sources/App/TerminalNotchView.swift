@@ -92,7 +92,13 @@ struct TerminalFaceButton: View {
                 ZStack {
                     workingGlow(active: TerminalBehavior.showsWorkingGlow(reading), diameter: 46, blur: 9)
                     attentionShine(slotID: slot.id, color: slot.color, shines: desk.shines, diameter: 46)
-                    MiniBotCanvasView(task: faceTask(slot, face))
+                    MiniBotCanvasView(
+                        task: faceTask(slot, face),
+                        noticeStarted: desk.notices[slot.id],
+                        glanceX: TerminalBehavior.glanceDirection(slot.id).x,
+                        glanceY: TerminalBehavior.glanceDirection(slot.id).y,
+                        hop: TerminalBehavior.noticeHopOpen
+                    )
                         .frame(width: 28 / 0.6, height: 28 / 0.6)
                 }
                 .frame(width: 28, height: 28)
@@ -331,7 +337,13 @@ struct CompactTerminalFaces: View {
                     ZStack {
                         workingGlow(active: TerminalBehavior.showsWorkingGlow(reading), diameter: 18, blur: 3.5)
                         attentionShine(slotID: slot.id, color: slot.color, shines: desk.shines, diameter: 22)
-                        MiniBotCanvasView(task: faceTask(slot, face))
+                        MiniBotCanvasView(
+                            task: faceTask(slot, face),
+                            noticeStarted: desk.notices[slot.id],
+                            glanceX: TerminalBehavior.glanceDirection(slot.id).x,
+                            glanceY: TerminalBehavior.glanceDirection(slot.id).y,
+                            hop: TerminalBehavior.noticeHopCompact
+                        )
                             .frame(width: 12 / 0.6, height: 12 / 0.6)
                     }
                     .frame(width: 12, height: 12)
@@ -358,7 +370,7 @@ struct TerminalSettingsSection: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Terminals")
                 .font(.system(size: 13, weight: .semibold))
-            Text("Green is the top left, yellow the top right, purple the bottom left, and red the bottom right. Click a color to bring its terminal forward. Hold it to put that window in its corner. The name stays on the first topic word until that terminal closes. A leftover word such as Finish or Replace changes once when a real name shows up. A name you type stays. Double-click the name to change it. The dot is orange when idle, blue when a new response is available, and purple when it needs your input. A blob with no terminal takes Xcode, Grok, or Claude before a plain shell, and the notch flashes that tool’s color. A plain shell turns Grass for green, Man Page for yellow, Violet for purple, and Red Sands for red. A window that comes back after Coucou starts is claimed too. Closing one terminal leaves the other windows where they are. Hold this page open keeps it up for 20 seconds after the pointer leaves, and the lock opens during the last 3 seconds. Drop a file on a color to attach it to that chat. An empty folder uses your home folder.")
+            Text("Green is the top left, yellow the top right, purple the bottom left, and red the bottom right. Click a color to bring its terminal forward. Hold it to put that window in its corner. The name stays on the first topic word until that terminal closes. A leftover word such as Finish or Replace changes once when a real name shows up. A name you type stays. Double-click the name to change it. The dot is orange when idle, blue when a new response is available, and purple when it needs your input. When it needs your input, that blob hops once, looks toward its corner, and a thin ring in its color grows out and fades. The dot stays still. A blob with no terminal takes Xcode, Grok, or Claude before a plain shell, and the notch flashes that tool’s color. A plain shell turns Grass for green, Man Page for yellow, Violet for purple, and Red Sands for red. A window that comes back after Coucou starts is claimed too. Closing one terminal leaves the other windows where they are. Hold this page open keeps it up for 20 seconds after the pointer leaves, and the lock opens during the last 3 seconds. Drop a file on a color to attach it to that chat. An empty folder uses your home folder.")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

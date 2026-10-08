@@ -151,10 +151,20 @@ struct BotCanvasView: View {
 /// Mini bot canvas (for agent pills/column)
 struct MiniBotCanvasView: View {
     let task: AgentTask
+    /// When set, this figure hops, glances, and grows a ring once.
+    var noticeStarted: Date? = nil
+    var glanceX: CGFloat = 0
+    var glanceY: CGFloat = 0
+    /// Hop distance in points. Zero keeps agent pills still.
+    var hop: CGFloat = 0
     @StateObject private var engine: BotEngine
 
-    init(task: AgentTask) {
+    init(task: AgentTask, noticeStarted: Date? = nil, glanceX: CGFloat = 0, glanceY: CGFloat = 0, hop: CGFloat = 0) {
         self.task = task
+        self.noticeStarted = noticeStarted
+        self.glanceX = glanceX
+        self.glanceY = glanceY
+        self.hop = hop
         _engine = StateObject(wrappedValue: {
             let e = BotEngine()
             e.isMini = true
@@ -166,15 +176,31 @@ struct MiniBotCanvasView: View {
 
     var body: some View {
         TimelineView(.animation) { timeline in
-            Canvas { context, size in
-                let now = timeline.date.timeIntervalSinceReferenceDate
-                let dt = min(0.05, now - engine.lastTime)
-                if engine.state != task.state {
-                    engine.setState(task.state)
+            let pose = noticePose(at: timeline.date)
+            ZStack {
+                Circle()
+                    .stroke(Color(hex: task.color), lineWidth: 1.25)
+                    .scaleEffect(pose.ringScale)
+                    .opacity(pose.ringOpacity)
+                    .accessibilityHidden(true)
+                Canvas { context, size in
+                    let now = timeline.date.timeIntervalSinceReferenceDate
+                    let dt = min(0.05, now - engine.lastTime)
+                    if engine.state != task.state {
+                        engine.setState(task.state)
+                    }
+                    let elapsed = noticeStarted.map { timeline.date.timeIntervalSince($0) } ?? -1
+                    if TerminalBehavior.noticeLookActive(elapsed: elapsed) {
+                        engine.noticeLook = CGPoint(x: glanceX * pose.glance, y: glanceY * pose.glance)
+                    } else {
+                        engine.noticeLook = nil
+                    }
+                    engine.update(dt: dt)
+                    engine.draw(context: context, size: size)
+                    engine.drawHandsAndExtras(context: context, size: size)
                 }
-                engine.update(dt: dt)
-                engine.draw(context: context, size: size)
-                engine.drawHandsAndExtras(context: context, size: size)
+                .offset(y: -pose.rise * hop)
+                .scaleEffect(x: pose.squashX, y: pose.squashY)
             }
         }
         .onChange(of: task.state) { _, newState in
@@ -192,6 +218,11 @@ struct MiniBotCanvasView: View {
                 engine.eyeOverrideUntil = .greatestFiniteMagnitude
             }
         }
+    }
+
+    private func noticePose(at date: Date) -> TerminalBehavior.NoticePose {
+        let elapsed = noticeStarted.map { date.timeIntervalSince($0) } ?? -1
+        return TerminalBehavior.noticePose(elapsed: elapsed)
     }
 }
 
