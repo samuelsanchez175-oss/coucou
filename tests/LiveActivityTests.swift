@@ -408,6 +408,18 @@ enum LiveActivityTests {
         precondition(SettingsNotchPreview.staysOpen(.activities))
         precondition(SettingsNotchPreview.staysOpen(.home))
         precondition(!SettingsNotchPreview.staysOpen(.none))
+        precondition(
+            SettingsNotchPreview.panelTakesThePress(settingsOpen: true, overDrawnIsland: false, overPanel: true) == false,
+            "an open settings tab lets a click through the empty part of the notch"
+        )
+        precondition(
+            SettingsNotchPreview.panelTakesThePress(settingsOpen: true, overDrawnIsland: true, overPanel: true),
+            "the drawn notch still takes its own clicks while settings is open"
+        )
+        precondition(
+            SettingsNotchPreview.panelTakesThePress(settingsOpen: false, overDrawnIsland: false, overPanel: true),
+            "a closed settings window still lets the open notch take a press on the panel"
+        )
 
         let shell = sourceSlice(
             file: "NotchBuddy/Sources/App/CoucouSettingsShell.swift",
@@ -422,6 +434,7 @@ enum LiveActivityTests {
         )
         precondition(general.contains("Haptic feedback"), "settings has a haptic switch")
         precondition(general.contains("nears the edge of the notch"), "the switch says what the click is for")
+        precondition(general.contains("HStack(alignment: .top"), "the lower settings sit in two columns")
         let opener = sourceSlice(
             file: "NotchBuddy/Sources/App/AppDelegate.swift",
             from: "private func openSettings",
@@ -438,6 +451,7 @@ enum LiveActivityTests {
         precondition(!hover.contains(".alignment"), "the edge click was the light tick")
         precondition(hover.contains("disableHaptics"), "the settings switch can turn the tick off")
         precondition(hover.contains("settingsPreview"), "an open settings page keeps its notch up")
+        precondition(hover.contains("panelTakesThePress"), "the settings tabs stay clickable under the open notch")
         let preview = sourceSlice(
             file: "NotchBuddy/Sources/App/IslandWindowController.swift",
             from: "private func keepSettingsPreview",

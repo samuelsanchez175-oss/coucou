@@ -351,9 +351,15 @@ final class IslandWindowController: NSWindowController {
         let panelBounds = CGRect(origin: .zero, size: panel.frame.size)
         // While the drawer is open the whole panel must take the press. A tray
         // chip can sit outside the hover math, and a click there used to fall
-        // through to the desktop.
-        let inIsland = hoverRect.contains(local) || pulling || (buttonHeld && state.mode == .expanded)
-            || (state.mode == .expanded && panelBounds.contains(local))
+        // through to the desktop. Settings sits under that panel, so an open
+        // settings tab keeps the press on the drawn island only.
+        let overDrawn = hoverRect.contains(local) || pulling || (buttonHeld && state.mode == .expanded)
+        let overPanel = state.mode == .expanded && panelBounds.contains(local)
+        let inIsland = SettingsNotchPreview.panelTakesThePress(
+            settingsOpen: settingsPreview != .none,
+            overDrawnIsland: overDrawn,
+            overPanel: overPanel
+        )
 
         // Toggle click-through
         let shouldAcceptMouse = inIsland || inAttachDrag || attachDragStart != nil

@@ -50,6 +50,8 @@ struct CoucouSettingsShell: View {
     var body: some View {
         VStack(spacing: 0) {
             tabBar
+                .zIndex(1)
+                .background(Color(nsColor: .windowBackgroundColor))
             Divider()
             Group {
                 switch tab {
@@ -71,6 +73,7 @@ struct CoucouSettingsShell: View {
             }
             .frame(maxWidth: SettingsPage.columnWidth, maxHeight: .infinity, alignment: .top)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .clipped()
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -145,68 +148,63 @@ private struct GeneralSettingsPane: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 12))
 
-                SettingsSection("Notch") {
-                    labeledRow("Show in fullscreen:") {
-                        Picker("Show in fullscreen", selection: settingsChoice("showInFullscreen", prefs, \.showInFullscreen)) {
-                            Text("On notched screens").tag("notched")
-                            Text("Always").tag("always")
-                            Text("Never").tag("never")
+                HStack(alignment: .top, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 16) {
+                        SettingsSection("Notch") {
+                            compactChoice("Show in fullscreen", selection: settingsChoice("showInFullscreen", prefs, \.showInFullscreen)) {
+                                Text("On notched screens").tag("notched")
+                                Text("Always").tag("always")
+                                Text("Never").tag("never")
+                            }
+                            compactChoice("Media source", selection: settingsChoice("mediaSource", prefs, \.mediaSource)) {
+                                Text("System").tag("system")
+                                Text("Music").tag("music")
+                                Text("Spotify").tag("spotify")
+                            }
+                            checkRow(title: "", "Prefer round buttons", bind(\.preferRoundButtons),
+                                     caption: "Use capsules instead of rounded rectangles for buttons.")
+                            checkRow(title: "", "Translucent notch background (experimental)", bind(\.translucentNotch), caption: nil)
+                            checkRow(title: "", "Always open on hover", bind(\.alwaysOpenOnHover),
+                                     caption: "This will disable some of Coucou's gestures.")
+                            checkRow(
+                                title: "",
+                                "Haptic feedback",
+                                hapticsOn,
+                                caption: "A firm click when the pointer nears the edge of the notch. On by default."
+                            )
                         }
-                        .labelsHidden()
-                        .frame(width: 180)
-                    }
-
-                    labeledRow("Media source:") {
-                        Picker("Media source", selection: settingsChoice("mediaSource", prefs, \.mediaSource)) {
-                            Text("System").tag("system")
-                            Text("Music").tag("music")
-                            Text("Spotify").tag("spotify")
+                        SettingsSection("Typing") {
+                            checkRow(title: "", "Prevent from closing on mouse leave", bind(\.preventCloseOnMouseLeave), caption: nil)
+                            checkRow(title: "", "Lock while typing", bind(\.lockWhileTyping), caption: nil)
                         }
-                        .labelsHidden()
-                        .frame(width: 140)
                     }
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
 
-                    checkRow(title: "", "Prefer round buttons", bind(\.preferRoundButtons),
-                             caption: "Use capsules instead of rounded rectangles for buttons.")
-                    checkRow(title: "", "Translucent notch background (experimental)", bind(\.translucentNotch), caption: nil)
-                    checkRow(title: "", "Always open on hover", bind(\.alwaysOpenOnHover),
-                             caption: "This will disable some of Coucou's gestures.")
-                    checkRow(
-                        title: "",
-                        "Haptic feedback",
-                        hapticsOn,
-                        caption: "A firm click when the pointer nears the edge of the notch. On by default."
-                    )
-                }
-
-                SettingsSection("Typing") {
-                    checkRow(title: "", "Prevent from closing on mouse leave", bind(\.preventCloseOnMouseLeave), caption: nil)
-                    checkRow(title: "", "Lock while typing", bind(\.lockWhileTyping), caption: nil)
-                }
-
-                SettingsSection("Spacing") {
-                    sliderRow("Content padding:", value: settingsSlider("contentPadding", prefs, \.contentPadding), range: 0...32)
-                }
-
-                SettingsSection("Notch size") {
-                    Text("Coucou tries its best to guess your notch size, but sometimes it can be a bit off. Here you can fine tune it. It has to be exactly the same of your notch.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    sliderRow("Width:", value: settingsSlider("notchWidthOffset", prefs, \.notchWidthOffset), range: -40...40)
-                    sliderRow("Height:", value: settingsSlider("notchHeightOffset", prefs, \.notchHeightOffset), range: -40...40)
-                }
-
-                SettingsSection("Screens without a notch") {
-                    Toggle("Show a handler", isOn: bind(\.handlerEnabled))
-                    Text("A handler is the stand-in notch on a screen that has no camera housing.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    sliderRow("Width:", value: settingsSlider("handlerWidth", prefs, \.handlerWidth), range: 40...220)
-                    sliderRow("Height:", value: settingsSlider("handlerHeight", prefs, \.handlerHeight), range: 16...64)
-                    checkRow(title: "", "Transparent handler", bind(\.handlerTransparent),
-                             caption: "Will only show up on mouse hover.")
+                    VStack(alignment: .leading, spacing: 16) {
+                        SettingsSection("Spacing") {
+                            compactSlider("Content padding", value: settingsSlider("contentPadding", prefs, \.contentPadding), range: 0...32)
+                        }
+                        SettingsSection("Notch size") {
+                            Text("Fine tune the guess so it matches your notch.")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            compactSlider("Width", value: settingsSlider("notchWidthOffset", prefs, \.notchWidthOffset), range: -40...40)
+                            compactSlider("Height", value: settingsSlider("notchHeightOffset", prefs, \.notchHeightOffset), range: -40...40)
+                        }
+                        SettingsSection("Screens without a notch") {
+                            Toggle("Show a handler", isOn: bind(\.handlerEnabled))
+                            Text("A stand-in notch on a screen with no camera housing.")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            compactSlider("Width", value: settingsSlider("handlerWidth", prefs, \.handlerWidth), range: 40...220)
+                            compactSlider("Height", value: settingsSlider("handlerHeight", prefs, \.handlerHeight), range: 16...64)
+                            checkRow(title: "", "Transparent handler", bind(\.handlerTransparent),
+                                     caption: "Will only show up on mouse hover.")
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
 
                 SettingsSection("Other") {
@@ -230,7 +228,6 @@ private struct GeneralSettingsPane: View {
             .padding(22)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .layoutPriority(1)
     }
 
     private func setLaunch(_ on: Bool) {
@@ -1095,6 +1092,34 @@ private struct AboutSettingsPane: View {
 }
 
 // MARK: - Rows
+
+private func compactChoice<Content: View>(
+    _ title: String, selection: Binding<String>, @ViewBuilder content: () -> Content
+) -> some View where Content: View {
+    VStack(alignment: .leading, spacing: 4) {
+        Text(title)
+            .font(.system(size: 12))
+        Picker(title, selection: selection, content: content)
+            .labelsHidden()
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private func compactSlider(_ title: String, value: Binding<Double>, range: ClosedRange<Double>) -> some View {
+    let snapped = Binding<Double>(
+        get: { value.wrappedValue },
+        set: { value.wrappedValue = $0.rounded() }
+    )
+    return HStack(spacing: 8) {
+        Text(title)
+            .font(.system(size: 12))
+            .frame(width: 108, alignment: .leading)
+        Slider(value: snapped, in: range)
+        Text("\(Int(value.wrappedValue.rounded()))")
+            .font(.system(size: 12, design: .monospaced))
+            .frame(width: 32, alignment: .trailing)
+    }
+}
 
 private func labeledRow<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
     HStack(alignment: .firstTextBaseline, spacing: 12) {

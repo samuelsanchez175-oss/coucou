@@ -369,15 +369,17 @@ struct CompactTerminalFaces: View {
 
 struct TerminalSettingsSection: View {
     @ObservedObject private var desk = TerminalDesk.shared
+    @ObservedObject private var app = AppState.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Terminals")
                 .font(.system(size: 13, weight: .semibold))
-            Text("Green is the top left, yellow the top right, purple the bottom left, and red the bottom right. Click a color to bring its terminal forward. Hold it to put that window in its corner. The name stays on the first topic word until that terminal closes. A leftover word such as Finish or Replace changes once when a real name shows up. A name you type stays. Double-click the name to change it. The dot is orange when idle, blue when a new response is available, and purple when it needs your input. When it needs your input, that blob hops once, looks toward its corner, and a thin ring in its color grows out and fades. The dot stays still. A blob with no terminal takes Xcode, Grok, or Claude before a plain shell, and the notch flashes that tool’s color. A plain shell turns Grass for green, Man Page for yellow, Violet for purple, and Red Sands for red. A window that comes back after Coucou starts is claimed too. Closing one terminal leaves the other windows where they are. Hold this page open keeps it up for 20 seconds after the pointer leaves, and the lock opens during the last 3 seconds. Drop a file on a color to attach it to that chat. An empty folder uses your home folder.")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 18) {
+                statusLight(.idle, "Idle")
+                statusLight(.working, "New response")
+                statusLight(.waiting, "Needs input")
+            }
             ForEach(desk.slots) { slot in
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 6) {
@@ -397,6 +399,20 @@ struct TerminalSettingsSection: View {
                             .textFieldStyle(.roundedBorder)
                         Button("Choose Folder") { desk.chooseFolder(slot.id) }
                     }
+                    Picker("AI", selection: assistantBinding(slot.id)) {
+                        Text("Claude").tag(TerminalBehavior.TerminalAssistant.claude.rawValue)
+                        Text("Grok").tag(TerminalBehavior.TerminalAssistant.grok.rawValue)
+                        Text("Codex").tag(TerminalBehavior.TerminalAssistant.codex.rawValue)
+                    }
+                    .pickerStyle(.segmented)
+                    .help("Opens this assistant the next time this color starts a window. The model is the one saved under Keys.")
+                    Text(TerminalBehavior.assistantDetail(
+                        slot.assistant,
+                        claudeModel: app.claudeModel,
+                        grokModel: app.grokModel
+                    ))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
                     Picker("Open window", selection: windowBinding(slot.id)) {
                         Text("New window").tag(0)
                         ForEach(desk.openWindows, id: \.id) { window in
@@ -428,6 +444,24 @@ struct TerminalSettingsSection: View {
             get: { desk.slots.first { $0.id == id }?.windowID ?? 0 },
             set: { desk.setWindow(id, $0 == 0 ? nil : $0) }
         )
+    }
+
+    private func assistantBinding(_ id: String) -> Binding<String> {
+        Binding(
+            get: { TerminalBehavior.launchTool(desk.slots.first { $0.id == id }?.assistant ?? "grok") },
+            set: { desk.setAssistant(id, $0) }
+        )
+    }
+
+    private func statusLight(_ face: TerminalBehavior.Face, _ label: String) -> some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(Color(hex: TerminalBehavior.statusColorHex(for: face)))
+                .frame(width: 8, height: 8)
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+        }
     }
 }
 

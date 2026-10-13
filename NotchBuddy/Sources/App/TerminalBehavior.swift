@@ -930,6 +930,78 @@ enum TerminalBehavior {
         "7": 6.03, "8": 6.85, "9": 6.78, " ": 2.78, "-": 4.91,
     ]
 
+    /// The assistant a color starts the next time it opens a window.
+    enum TerminalAssistant: String, CaseIterable {
+        case grok, claude, codex
+
+        var title: String {
+            switch self {
+            case .grok: return "Grok"
+            case .claude: return "Claude"
+            case .codex: return "Codex"
+            }
+        }
+
+        var missingLine: String {
+            switch self {
+            case .grok: return "Grok CLI not found"
+            case .claude: return "Claude CLI not found"
+            case .codex: return "Codex CLI not found"
+            }
+        }
+    }
+
+    /// Grok, Claude, or Codex. Anything else stays on Grok.
+    static func launchTool(_ raw: String) -> String {
+        TerminalAssistant(rawValue: raw)?.rawValue ?? TerminalAssistant.grok.rawValue
+    }
+
+    static func missingLine(for raw: String) -> String {
+        let tool = launchTool(raw)
+        return TerminalAssistant(rawValue: tool)?.missingLine ?? TerminalAssistant.grok.missingLine
+    }
+
+    /// The window printed that the chosen assistant is not installed.
+    static func cliIsMissing(_ line: String) -> Bool {
+        let lower = line.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return TerminalAssistant.allCases.contains { $0.missingLine.lowercased() == lower }
+    }
+
+    /// The model saved under Keys for this assistant.
+    static func assistantDetail(_ tool: String, claudeModel: String, grokModel: String) -> String {
+        switch launchTool(tool) {
+        case "claude":
+            return "\(modelTitle(claudeModel)) in Keys"
+        case "codex":
+            return "Codex CLI"
+        default:
+            return "\(modelTitle(grokModel)) in Keys"
+        }
+    }
+
+    /// The model id a new window should start with. Codex has no Keys model.
+    static func modelArgument(tool: String, claudeModel: String, grokModel: String) -> String {
+        let id: String
+        switch launchTool(tool) {
+        case "claude": id = claudeModel
+        case "grok": id = grokModel
+        default: return ""
+        }
+        return id.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func modelTitle(_ id: String) -> String {
+        switch id.trimmingCharacters(in: .whitespacesAndNewlines) {
+        case "claude-sonnet-4-6": return "Claude Sonnet 4.6"
+        case "claude-sonnet-5-5": return "Claude Sonnet 5.5"
+        case "claude-opus-5-5": return "Claude Opus 5.5"
+        case "claude-haiku-4-5-20251001": return "Claude Haiku 4.5"
+        case "grok-4.7": return "Grok 4.7"
+        case "": return "Keys"
+        default: return id.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+    }
+
     /// Idle is orange. A new response is blue. A question is purple.
     static func statusPhrase(for face: Face) -> String {
         switch face {
@@ -1061,7 +1133,7 @@ enum TerminalBehavior {
             .filter { !$0.isEmpty }
         guard let last = lines.last else { return Reading(face: .idle, grokMissing: false) }
         let lower = last.lowercased()
-        if lower == "grok cli not found" { return Reading(face: .idle, grokMissing: true) }
+        if cliIsMissing(last) { return Reading(face: .idle, grokMissing: true) }
         if lower.contains("password:") || lower.contains("[y/n]") || lower.contains("(yes/no)") || lower.contains("yes/no") {
             return Reading(face: .waiting, grokMissing: false)
         }

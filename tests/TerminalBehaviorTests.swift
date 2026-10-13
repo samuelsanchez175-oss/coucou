@@ -38,12 +38,13 @@ enum TerminalBehaviorTests {
         testMarriageFollowsTheSameTerminalWhenItsWindowChanges()
         testStatusHeartbeats()
         testEmptyBlobHidesTheCornerLight()
+        testEachTerminalChoosesAnAssistant()
         testPageLockHoldsThenOpens()
         testDropHitsTheBlob()
         testNookKeepsTheSharedHeader()
         testHeaderSitsOnTheMenuBar()
         testBlobOpensAWindowAtTwentyPoint()
-        print("Terminal behavior: 37 cases passed")
+        print("Terminal behavior: 38 cases passed")
     }
 
     /// A download that prints "45%" must stay Working. Treating every
@@ -1016,6 +1017,64 @@ enum TerminalBehaviorTests {
         )
         let sizing = try! String(contentsOfFile: "NotchBuddy/Sources/App/IslandWindowController.swift", encoding: .utf8)
         precondition(sizing.contains("collapsedWing"), "the closed notch is wide enough for both ears")
+    }
+
+    /// Each color can open Grok, Claude, or Codex. An unknown choice stays on Grok.
+    /// The settings page shows the three status lights instead of the long passage.
+    static func testEachTerminalChoosesAnAssistant() {
+        precondition(TerminalBehavior.launchTool("grok") == "grok")
+        precondition(TerminalBehavior.launchTool("claude") == "claude")
+        precondition(TerminalBehavior.launchTool("codex") == "codex")
+        precondition(TerminalBehavior.launchTool("something-else") == "grok", "an unknown assistant stays on Grok")
+        precondition(TerminalBehavior.missingLine(for: "claude") == "Claude CLI not found")
+        precondition(TerminalBehavior.missingLine(for: "codex") == "Codex CLI not found")
+        precondition(TerminalBehavior.cliIsMissing("Grok CLI not found"))
+        precondition(TerminalBehavior.cliIsMissing("Claude CLI not found"))
+        precondition(!TerminalBehavior.cliIsMissing("compiling sources"))
+        precondition(
+            TerminalBehavior.assistantDetail("claude", claudeModel: "claude-sonnet-4-6", grokModel: "grok-4.7")
+                == "Claude Sonnet 4.6 in Keys"
+        )
+        precondition(
+            TerminalBehavior.assistantDetail("grok", claudeModel: "claude-sonnet-4-6", grokModel: "grok-4.7")
+                == "Grok 4.7 in Keys"
+        )
+        precondition(
+            TerminalBehavior.modelArgument(tool: "claude", claudeModel: "claude-sonnet-4-6", grokModel: "grok-4.7")
+                == "claude-sonnet-4-6"
+        )
+        precondition(
+            TerminalBehavior.modelArgument(tool: "grok", claudeModel: "claude-sonnet-4-6", grokModel: " grok-4.7 ")
+                == "grok-4.7"
+        )
+        precondition(
+            TerminalBehavior.modelArgument(tool: "codex", claudeModel: "claude-sonnet-4-6", grokModel: "grok-4.7").isEmpty,
+            "Codex has no model under Keys"
+        )
+        let claude = TerminalBehavior.classify("Claude CLI not found")
+        precondition(claude.face == .idle && claude.grokMissing, "a missing Claude install stays idle")
+
+        let view = try! String(contentsOfFile: "NotchBuddy/Sources/App/TerminalNotchView.swift", encoding: .utf8)
+        let settings = sourceSlice(view, from: "struct TerminalSettingsSection", until: "private func blobLabel")
+        precondition(!settings.contains("The name stays on the first topic word"), "the long terminal passage is gone")
+        precondition(settings.contains("statusColorHex"), "the settings page shows the status lights")
+        precondition(settings.contains("Idle") && settings.contains("New response") && settings.contains("Needs input"), "the lights name the three states")
+        precondition(settings.contains("launchTool"), "each terminal can choose its assistant")
+        precondition(settings.contains("assistantDetail"), "the terminal row uses the model saved in Keys")
+        let keys = try! String(contentsOfFile: "NotchBuddy/Sources/App/SettingsView.swift", encoding: .utf8)
+        let keysBody = sourceSlice(keys, from: "var body: some View", until: "private func applyCustomModel")
+        precondition(keysBody.contains("HStack(alignment: .top"), "the Keys page sits in two columns")
+        precondition(settings.contains("Claude") && settings.contains("Codex") && settings.contains("Grok"), "the choices are Claude, Grok, and Codex")
+
+        let desk = try! String(contentsOfFile: "NotchBuddy/Sources/App/TerminalDesk.swift", encoding: .utf8)
+        let created = sourceSlice(desk, from: "func openNew(", until: "enum CotypistLink")
+        precondition(created.contains("toolName"), "a new window runs the assistant that color chose")
+        precondition(created.contains("command -v"), "the window checks that the assistant is installed")
+        precondition(created.contains("--model"), "a new window starts on the model saved in Keys")
+        precondition(created.contains("quoted form of modelID"), "the model id is quoted")
+        let opener = sourceSlice(desk, from: "func openOrFocus(", until: "func togglePageLock(")
+        precondition(opener.contains("launchTool"), "opening a color uses that color's assistant")
+        precondition(opener.contains("modelArgument"), "opening a color uses the model saved in Keys")
     }
 
     /// The orange corner light is a terminal's idle status. A blob with no

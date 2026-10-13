@@ -37,6 +37,8 @@ struct TerminalSlot: Identifiable, Equatable {
     var tty: String = ""
     /// Noun kept for this session. Empty until the first good title, or a name you type.
     var lockedName: String = ""
+    /// grok, claude, or codex. Used the next time this color opens a window.
+    var assistant: String = "grok"
 }
 
 private struct StoredTerminal: Codable {
@@ -46,6 +48,7 @@ private struct StoredTerminal: Codable {
     var windowID: Int?
     var tty: String?
     var lockedName: String?
+    var assistant: String?
 }
 
 /// Four fixed Terminal.app sessions, one per notch color.
@@ -112,7 +115,8 @@ final class TerminalDesk: ObservableObject {
                 folder: prior?.folder ?? "",
                 windowID: prior?.windowID,
                 tty: prior?.tty ?? "",
-                lockedName: prior?.lockedName ?? ""
+                lockedName: prior?.lockedName ?? "",
+                assistant: TerminalBehavior.launchTool(prior?.assistant ?? "grok")
             )
         }
         for slot in slots { faces[slot.id] = .idle }
@@ -175,6 +179,15 @@ final class TerminalDesk: ObservableObject {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         slots[index].name = trimmed.isEmpty ? slots[index].name : trimmed
         slots[index].lockedName = trimmed
+        save()
+    }
+
+    /// The assistant this color starts the next time it opens a window.
+    func setAssistant(_ id: String, _ raw: String) {
+        guard let index = slots.firstIndex(where: { $0.id == id }) else { return }
+        let tool = TerminalBehavior.launchTool(raw)
+        guard slots[index].assistant != tool else { return }
+        slots[index].assistant = tool
         save()
     }
 
@@ -364,10 +377,12 @@ final class TerminalDesk: ObservableObject {
             opening.insert(id)
         }
         let shell = creating ? TerminalBehavior.shellProfile(id) : ""
+        let tool = TerminalBehavior.launchTool(slot.assistant)
+        let model = TerminalBehavior.modelArgument(tool: tool, claudeModel: AppState.shared.claudeModel, grokModel: AppState.shared.grokModel)
         beginPlace()
         Task {
             let tiled = await Task.detached { () -> (TerminalBridge.Outcome, [TerminalBridge.PlacedWindow]) in
-                var outcome = TerminalBridge.openOrFocus(windowID: focusID, folder: folder, bounds: clicked, profile: shell)
+                var outcome = TerminalBridge.openOrFocus(windowID: focusID, folder: folder, bounds: clicked, profile: shell, tool: tool, model: model)
                 guard let focus = outcome.windowID else { return (outcome, []) }
                 var batch = others
                 batch.append((focus, clicked))
@@ -420,13 +435,15 @@ final class TerminalDesk: ObservableObject {
         let layout = frames(including: id)
         let bounds = layout[id] ?? TerminalBehavior.TerminalBounds(left: 0, top: 25, right: 800, bottom: 500)
         let hadWindow = windowID != nil
+        let tool = TerminalBehavior.launchTool(slot.assistant)
+        let model = TerminalBehavior.modelArgument(tool: tool, claudeModel: AppState.shared.claudeModel, grokModel: AppState.shared.grokModel)
         let queries = files.map { TerminalBehavior.attachmentQuery(path: $0.path, isDirectory: $0.directory) }
         let note = TerminalBehavior.attachmentNote(names: files.map(\.name))
         notes[id] = note
         beginPlace()
         Task {
             let outcome = await Task.detached {
-                TerminalBridge.attach(queries, windowID: windowID, folder: folder, bounds: bounds)
+                TerminalBridge.attach(queries, windowID: windowID, folder: folder, bounds: bounds, tool: tool, model: model)
             }.value
             endPlace()
             apply(id, outcome)
@@ -454,10 +471,12 @@ final class TerminalDesk: ObservableObject {
         let layout = frames(including: id)
         let bounds = layout[id] ?? TerminalBehavior.TerminalBounds(left: 0, top: 25, right: 800, bottom: 500)
         let hadWindow = windowID != nil
+        let tool = TerminalBehavior.launchTool(slot.assistant)
+        let model = TerminalBehavior.modelArgument(tool: tool, claudeModel: AppState.shared.claudeModel, grokModel: AppState.shared.grokModel)
         beginPlace()
         Task {
             let outcome = await Task.detached {
-                TerminalBridge.send(text, windowID: windowID, folder: folder, bounds: bounds)
+                TerminalBridge.send(text, windowID: windowID, folder: folder, bounds: bounds, tool: tool, model: model)
             }.value
             endPlace()
             apply(id, outcome)
@@ -681,8 +700,8 @@ final class TerminalDesk: ObservableObject {
                 notices[slot.id] = Date()
             }
             if read.grokMissing {
-                notes[slot.id] = "Grok CLI not found"
-            } else if notes[slot.id] == "Grok CLI not found" {
+                notes[slot.id] = TerminalBehavior.missingLine(for: slot.assistant)
+            } else if let note = notes[slot.id], TerminalBehavior.cliIsMissing(note) {
                 notes[slot.id] = nil
             }
         }
@@ -703,7 +722,7 @@ final class TerminalDesk: ObservableObject {
             titles[id] = TerminalBehavior.adoptedName(windowTitle: title, fallback: slots[index].name)
         }
         if outcome.grokMissing {
-            notes[id] = "Grok CLI not found"
+            notes[id] = TerminalBehavior.missingLine(for: slots[index].assistant)
         }
         if outcome.accessibility {
             accessibilityOff = true
@@ -896,7 +915,8 @@ final class TerminalDesk: ObservableObject {
                 folder: $0.folder,
                 windowID: $0.windowID,
                 tty: $0.tty.isEmpty ? nil : $0.tty,
-                lockedName: $0.lockedName.isEmpty ? nil : $0.lockedName
+                lockedName: $0.lockedName.isEmpty ? nil : $0.lockedName,
+                assistant: TerminalBehavior.launchTool($0.assistant)
             )
         }
         if let data = try? JSONEncoder().encode(stored) {
@@ -1078,7 +1098,7 @@ enum TerminalBridge {
         )
     }
 
-    nonisolated static func openOrFocus(windowID: Int?, folder: String, bounds: TerminalBehavior.TerminalBounds, profile: String = "") -> Outcome {
+    nonisolated static func openOrFocus(windowID: Int?, folder: String, bounds: TerminalBehavior.TerminalBounds, profile: String = "", tool: String = "grok", model: String = "") -> Outcome {
         if let windowID, let placed = place(windowID, bounds) {
             return Outcome(
                 ok: true,
@@ -1088,14 +1108,14 @@ enum TerminalBridge {
                 windowTitle: placed.title
             )
         }
-        return openNew(folder: folder, bounds: bounds, profile: profile)
+        return openNew(folder: folder, bounds: bounds, profile: profile, tool: tool, model: model)
     }
 
-    nonisolated static func send(_ text: String, windowID: Int?, folder: String, bounds: TerminalBehavior.TerminalBounds) -> Outcome {
+    nonisolated static func send(_ text: String, windowID: Int?, folder: String, bounds: TerminalBehavior.TerminalBounds, tool: String = "grok", model: String = "") -> Outcome {
         var target = windowID
         var openedTitle: String?
         if target == nil || !focus(target!) {
-            let opened = openNew(folder: folder, bounds: bounds)
+            let opened = openNew(folder: folder, bounds: bounds, tool: tool, model: model)
             guard opened.ok, let id = opened.windowID else { return opened }
             target = id
             openedTitle = opened.windowTitle
@@ -1130,14 +1150,14 @@ enum TerminalBridge {
     }
 
     /// Type each `@path` into the Grok chat, accept the file picker, then send.
-    nonisolated static func attach(_ queries: [String], windowID: Int?, folder: String, bounds: TerminalBehavior.TerminalBounds) -> Outcome {
+    nonisolated static func attach(_ queries: [String], windowID: Int?, folder: String, bounds: TerminalBehavior.TerminalBounds, tool: String = "grok", model: String = "") -> Outcome {
         guard !queries.isEmpty else {
             return Outcome(ok: false, windowID: windowID, grokMissing: false, accessibility: false, windowTitle: nil)
         }
         var target = windowID
         var openedTitle: String?
         if target == nil || !focus(target!) {
-            let opened = openNew(folder: folder, bounds: bounds)
+            let opened = openNew(folder: folder, bounds: bounds, tool: tool, model: model)
             guard opened.ok, let id = opened.windowID else { return opened }
             target = id
             openedTitle = opened.windowTitle
@@ -1494,7 +1514,10 @@ enum TerminalBridge {
         return raised
     }
 
-    nonisolated private static func openNew(folder: String, bounds: TerminalBehavior.TerminalBounds, profile: String = "") -> Outcome {
+    nonisolated private static func openNew(folder: String, bounds: TerminalBehavior.TerminalBounds, profile: String = "", tool: String = "grok", model: String = "") -> Outcome {
+        let executable = TerminalBehavior.launchTool(tool)
+        let missingNote = TerminalBehavior.missingLine(for: executable)
+        let modelID = model.trimmingCharacters(in: .whitespacesAndNewlines)
         let script = """
         on run argv
           set folderPath to item 1 of argv
@@ -1503,7 +1526,12 @@ enum TerminalBridge {
           set rightEdge to item 4 of argv as integer
           set bottomEdge to item 5 of argv as integer
           set profileName to item 6 of argv
-          set cmd to "export PATH=\\"$HOME/.grok/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\\"; cd " & quoted form of folderPath & " && if command -v grok >/dev/null 2>&1; then exec grok; else echo 'Grok CLI not found'; fi"
+          set toolName to item 7 of argv
+          set missingLine to item 8 of argv
+          set modelID to item 9 of argv
+          set launch to toolName
+          if modelID is not "" then set launch to toolName & " --model " & quoted form of modelID
+          set cmd to "export PATH=\\"$HOME/.grok/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\\"; cd " & quoted form of folderPath & " && if command -v " & toolName & " >/dev/null 2>&1; then exec " & launch & "; else echo " & quoted form of missingLine & "; fi"
           tell application "Terminal"
             \(rememberWindowFrames)
             activate
@@ -1548,7 +1576,7 @@ enum TerminalBridge {
             end try
           end tell
           set status to "ok"
-          if blob contains "Grok CLI not found" then set status to "missing-grok"
+          if blob contains "CLI not found" then set status to "missing-grok"
           return (wid as text) & character id 31 & status & character id 31 & wname
         end run
         """
@@ -1559,6 +1587,9 @@ enum TerminalBridge {
             String(bounds.right),
             String(bounds.bottom),
             profile,
+            executable,
+            missingNote,
+            modelID,
         ]) ?? ""
         let bits = reply.components(separatedBy: "\u{1f}")
         guard let id = Int(bits.first ?? "") else {

@@ -201,4 +201,12 @@ enum SettingsNotchPreview {
     static func staysOpen(_ page: SettingsNotchPage) -> Bool {
         page != .none
     }
+
+    /// The open notch panel is taller than the drawn island and sits above the
+    /// settings window. While settings is open, only the drawn island takes the
+    /// press, so the eight tabs underneath stay clickable.
+    static func panelTakesThePress(settingsOpen: Bool, overDrawnIsland: Bool, overPanel: Bool) -> Bool {
+        if settingsOpen { return overDrawnIsland }
+        return overDrawnIsland || overPanel
+    }
 }

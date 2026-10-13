@@ -86,7 +86,8 @@ struct SettingsView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 16) {
 
                 // MARK: API
                 GroupBox("Anthropic API") {
@@ -121,7 +122,7 @@ struct SettingsView: View {
                                 .onChange(of: customModel) { _, value in applyCustomModel(value) }
                         }
 
-                        Text("Used by the chat when Claude is selected. The list comes from your Anthropic account.")
+                        Text("The notch chat and each Claude terminal use this model. The list comes from your Anthropic account.")
                             .font(.system(size: 11))
                             .foregroundColor(.secondary)
                     }
@@ -163,7 +164,7 @@ struct SettingsView: View {
                                 .onChange(of: grokCustom) { _, value in applyGrokModel(value) }
                         }
 
-                        Text("The key stays in the Keychain on this Mac. Chat sends it only when Grok is selected.")
+                        Text("The notch chat and each Grok terminal use this model. The key stays in the Keychain on this Mac.")
                             .font(.system(size: 11))
                             .foregroundColor(.secondary)
                     }
@@ -313,6 +314,10 @@ struct SettingsView: View {
                 }
                 #endif
 
+            }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+
+            VStack(alignment: .leading, spacing: 16) {
                 // MARK: Integrations
                 GroupBox("Integrations") {
                     VStack(alignment: .leading, spacing: 14) {
@@ -439,7 +444,8 @@ struct SettingsView: View {
                         .padding(.horizontal, 2)
                 }
 
-                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
             }
             .padding(20)
         }
@@ -463,7 +469,6 @@ struct SettingsView: View {
             }
         }
         .frame(minWidth: 420, maxWidth: .infinity, minHeight: 320, maxHeight: .infinity)
-        .layoutPriority(1)
     }
 
     // MARK: - Actions
