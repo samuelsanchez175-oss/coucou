@@ -77,162 +77,47 @@ struct IslandContainer: View {
         )
         let earHeight = clearance.expandedOffset > 0 ? clearance.expandedOffset : islandHeight
 
-        return ZStack(alignment: .topLeading) {
+        return watchIsland(islandLayers(
+            uploadActive: uploadActive,
+            greetingActive: greetingActive,
+            nookActive: nookActive,
+            clearance: clearance,
+            earY: earY,
+            dropY: dropY,
+            showMedia: showMedia,
+            earHeight: earHeight
+        ))
+    }
+
+    private func islandLayers(
+        uploadActive: Bool,
+        greetingActive: Bool,
+        nookActive: Bool,
+        clearance: NotchClearance,
+        earY: CGFloat,
+        dropY: CGFloat,
+        showMedia: Bool,
+        earHeight: CGFloat
+    ) -> some View {
+        ZStack(alignment: .topLeading) {
             // Black island shape. The open notch covers the menu bar, and the buttons sit on that black.
             IslandShape(width: islandWidth, height: islandHeight,
                         cornerRadius: cornerRadius, topRadius: islandTopRadius)
                 .fill(prefs.translucentNotch ? Color.black.opacity(0.62) : Color.black)
 
-            // Content is laid out at the settled size, then scaled into the
-            // growing shape. Opacity and blur follow IslandMotion so the open
-            // does not show squished type and the close does not leave a ghost.
-            if state.mode == .expanded || holdContent {
-                let drawnView = state.mode == .expanded ? state.view : heldView
-                let target = displayedSize(mode: .expanded, view: drawnView)
-                let scale = contentScale(target: target)
-                let contentHeight = max(0, target.1 - clearance.expandedOffset)
-                let drawGreeting = drawnView == .greeting && !uploadActive
-                Group {
-                    if drawGreeting {
-                        GreetingCanvasView(state: state)
-                            .frame(width: IslandConst.expandedWidth, height: 150)
-                            .offset(x: (target.0 - IslandConst.expandedWidth) / 2)
-                    } else if uploadActive {
-                        ZStack(alignment: .topLeading) {
-                            UploadCanvasView(state: state)
-                                .frame(width: target.0, height: contentHeight)
-                            if clearance.expandedOffset == 0 {
-                                IslandHeader(state: state)
-                                    .frame(width: target.0, height: 34)
-                                    .offset(y: 8)
-                            }
-                        }
-                    } else {
-                        IslandContentView(state: state)
-                            .frame(width: target.0, height: max(0, contentHeight - earOffset))
-                            .offset(y: earOffset)
-                    }
-                }
-                .offset(y: clearance.expandedOffset)
-                .scaleEffect(scale, anchor: .top)
-                .frame(width: islandWidth, height: islandHeight, alignment: .top)
-                .blur(radius: IslandMotion.blur(scale: scale))
-                .opacity(contentShown)
-                .clipShape(IslandShape(width: islandWidth, height: islandHeight,
-                                      cornerRadius: cornerRadius, topRadius: islandTopRadius))
-                .allowsHitTesting(state.mode == .expanded && contentShown > 0.9)
-
-                if clearance.expandedOffset > 0 && drawnView != .greeting {
-                    let wings = TerminalBehavior.menuBarWings(islandWidth: target.0, notchWidth: state.notchWidth)
-                    IslandHeader(
-                        state: state,
-                        notchLeading: wings.notchLeading,
-                        notchTrailing: wings.notchTrailing,
-                        bandWidth: target.0
-                    )
-                    .frame(width: target.0, height: clearance.expandedOffset)
-                    .scaleEffect(scale, anchor: .top)
-                    .frame(width: islandWidth, height: clearance.expandedOffset, alignment: .center)
-                    .opacity(drawnView == .confused ? 0 : contentShown)
-                    .allowsHitTesting(state.mode == .expanded && contentShown > 0.9 && drawnView != .confused)
-                }
-            }
+            // Content is laid out at the settled size, then scaled into the growing shape.
+            expandedPage(uploadActive: uploadActive, clearance: clearance)
 
             // Single BotPlacement — always alive in the view tree so spring animations
             // fire from the current position (e.g. choose at 60,101) when canvas deactivates.
             // Hidden during upload canvas or greeting (both draw their own Mochi).
-            BotPlacement(state: state, islandW: islandWidth, islandH: islandHeight,
-                         sideWing: state.mode == .expanded ? 0 : board.restingExtra)
-                // Keep idle animations inside the resting strip. Expanded views
-                // retain the panel's full height for particles and hands.
-                .mask(alignment: .topLeading) {
-                    Rectangle().frame(width: islandWidth,
-                                      height: state.mode == .expanded ? IslandConst.panelHeight : islandHeight)
-                }
-                .opacity(uploadActive || greetingActive || nookActive ? 0 : 1)
-                .animation(.easeInOut(duration: 0.25), value: uploadActive || greetingActive || nookActive)
+            restingBot(uploadActive: uploadActive, greetingActive: greetingActive, nookActive: nookActive)
 
             CountdownBar(state: state, islandW: islandWidth)
 
-            if state.mode != .expanded, !hud.visible {
-                let kind = IslandMotion.shelf(playing: showMedia, pointerOnNotch: board.pointerOnNotch)
-                if kind != .faces {
-                    NotchMediaShelf(
-                        board: board,
-                        islandWidth: islandWidth,
-                        contentCenterY: earY
-                    )
-                    .frame(width: islandWidth, height: islandHeight)
-                }
-            }
-
-            if state.mode != .expanded, !hud.visible, let edge = edgeHeadline {
-                if edge.id == "tray", board.trayWing > 0 {
-                    LiveActivityPill(headline: edge)
-                        .frame(maxWidth: max(24, board.trayWing - 8))
-                        .position(
-                            x: NookLayout.trayPillCenterX(side: board.trayWing),
-                            y: NookLayout.collapsedAnchorY(housingCenter: earY)
-                        )
-                } else if edge.id == "media", state.hasNotch {
-                    let placed = NookPlayback.mediaTitlePlacement(
-                        islandWidth: islandWidth,
-                        notchWidth: state.notchWidth
-                    )
-                    if placed.maxWidth > 0 {
-                        LiveActivityPill(headline: edge)
-                            .frame(width: placed.maxWidth, alignment: .leading)
-                            .clipped()
-                            .position(
-                                x: placed.centerX,
-                                y: NookLayout.collapsedAnchorY(housingCenter: earY)
-                            )
-                    }
-                } else if edge.id != "tray" {
-                    let inNotch = board.restingExtra <= 0
-                    LiveActivityPill(headline: edge)
-                        .frame(maxWidth: inNotch ? max(40, islandWidth - 28) : max(80, board.restingExtra - 16))
-                        .position(
-                            x: inNotch ? islandWidth / 2 : islandWidth - board.restingExtra / 2,
-                            y: NookLayout.collapsedAnchorY(housingCenter: earY)
-                        )
-                }
-            }
-
-            if hud.visible {
-                let hudWing: CGFloat = state.mode == .expanded ? 0 : HudBehavior.wing
-                let openWidth = displayedSize(mode: state.mode, view: state.view).0
-                let restingWidth = openWidth - IslandMotion.balancedWidth(side: hudWing)
-                let showStrip = HudBehavior.stripShown(
-                    showing: true,
-                    shapeWidth: islandWidth,
-                    restingWidth: restingWidth,
-                    openWidth: openWidth
-                )
-                if showStrip {
-                    HudStrip(title: hud.title, symbol: hud.symbol, percent: hud.percent, fraction: hud.fraction)
-                        .frame(width: HudBehavior.wing, height: 28)
-                        .position(
-                            x: state.mode == .expanded
-                                ? islandWidth / 2
-                                : HudBehavior.stripCenterX(islandWidth: islandWidth, wing: HudBehavior.wing),
-                            y: state.mode == .expanded
-                                ? (clearance.expandedOffset > 0 ? dropY : 22)
-                                : NookLayout.collapsedAnchorY(housingCenter: earY)
-                        )
-                }
-            }
-
-            if state.mode != .expanded {
-                let blobs = TerminalBehavior.collapsedBlobCenters(
-                    islandWidth: islandWidth,
-                    notchWidth: state.notchWidth
-                )
-                CompactTerminalFaces()
-                    .scaleEffect(IslandRestingLayout(width: islandWidth, height: earHeight).miniGridScale)
-                    .position(x: blobs.facesX, y: earY)
-                    .transition(.opacity)
-            }
+            closedNotices(showMedia: showMedia, earY: earY)
+            notchHud(clearance: clearance, earY: earY, bandCenter: dropY)
+            closedFaces(earY: earY, earHeight: earHeight)
 
             if state.mode == .expanded {
                 DrawerPullTab(state: state, restingHeight: max(1, islandHeight - state.drawerExtension)) {
@@ -241,6 +126,46 @@ struct IslandContainer: View {
                 .position(x: islandWidth / 2, y: max(DrawerPull.tabCenterInset, islandHeight - DrawerPull.tabCenterInset))
             }
         }
+    }
+
+    private func restingBot(uploadActive: Bool, greetingActive: Bool, nookActive: Bool) -> some View {
+        BotPlacement(state: state, islandW: islandWidth, islandH: islandHeight,
+                     sideWing: state.mode == .expanded ? 0 : board.restingExtra)
+            .mask(alignment: .topLeading) {
+                Rectangle().frame(width: islandWidth,
+                                  height: state.mode == .expanded ? IslandConst.panelHeight : islandHeight)
+            }
+            .opacity(uploadActive || greetingActive || nookActive ? 0 : 1)
+            .animation(.easeInOut(duration: 0.25), value: uploadActive || greetingActive || nookActive)
+    }
+
+    @ViewBuilder
+    private func closedFaces(earY: CGFloat, earHeight: CGFloat) -> some View {
+        if state.mode != .expanded {
+            let blobs = TerminalBehavior.collapsedBlobCenters(
+                islandWidth: islandWidth,
+                notchWidth: state.notchWidth
+            )
+            ZStack(alignment: .topLeading) {
+                CompactTerminalFaces()
+                    .scaleEffect(IslandRestingLayout(width: islandWidth, height: earHeight).miniGridScale)
+                    .position(x: blobs.facesX, y: earY)
+                    .transition(.opacity)
+                if board.lampMarked {
+                    let housing = NookPlayback.housingEdges(islandWidth: islandWidth, notchWidth: state.notchWidth)
+                    let lampX = NookLayout.closedLampCenterX(
+                        whiteCenter: blobs.whiteX,
+                        housingLeading: housing.leading
+                    )
+                    ClosedNookLamp(centerX: lampX, centerY: earY, hint: board.lampHint)
+                }
+            }
+            .frame(width: islandWidth, height: islandHeight, alignment: .topLeading)
+        }
+    }
+
+    private func watchIsland<Content: View>(_ content: Content) -> some View {
+        content
         .frame(width: islandWidth, height: islandHeight, alignment: .topLeading)
         .coordinateSpace(name: "coucouDrawer")
         .onChange(of: state.mode) { oldMode, newMode in
@@ -329,6 +254,158 @@ struct IslandContainer: View {
         .onReceive(NotificationCenter.default.publisher(for: .botGreet)) { _ in
             greetNotif.toggle()
         }
+    }
+
+    /// Open panel, scaled into the shape that is on screen.
+    @ViewBuilder
+    private func expandedPage(uploadActive: Bool, clearance: NotchClearance) -> some View {
+        if state.mode == .expanded || holdContent {
+            let drawnView = state.mode == .expanded ? state.view : heldView
+            let target = displayedSize(mode: .expanded, view: drawnView)
+            let scale = contentScale(target: target)
+            let contentHeight = max(0, target.1 - clearance.expandedOffset)
+            let drawGreeting = drawnView == .greeting && !uploadActive
+            ZStack(alignment: .topLeading) {
+                Group {
+                    if drawGreeting {
+                        GreetingCanvasView(state: state)
+                            .frame(width: IslandConst.expandedWidth, height: 150)
+                            .offset(x: (target.0 - IslandConst.expandedWidth) / 2)
+                    } else if uploadActive {
+                        ZStack(alignment: .topLeading) {
+                            UploadCanvasView(state: state)
+                                .frame(width: target.0, height: contentHeight)
+                            if clearance.expandedOffset == 0 {
+                                IslandHeader(state: state)
+                                    .frame(width: target.0, height: 34)
+                                    .offset(y: 8)
+                            }
+                        }
+                    } else {
+                        IslandContentView(state: state)
+                            .frame(width: target.0, height: max(0, contentHeight - earOffset))
+                            .offset(y: earOffset)
+                    }
+                }
+                .offset(y: clearance.expandedOffset)
+                .scaleEffect(scale, anchor: .top)
+                .frame(width: islandWidth, height: islandHeight, alignment: .top)
+                .blur(radius: IslandMotion.blur(scale: scale))
+                .opacity(contentShown)
+                .clipShape(IslandShape(width: islandWidth, height: islandHeight,
+                                      cornerRadius: cornerRadius, topRadius: islandTopRadius))
+                .allowsHitTesting(state.mode == .expanded && contentShown > 0.9)
+
+                if clearance.expandedOffset > 0 && drawnView != .greeting {
+                    let wings = TerminalBehavior.menuBarWings(islandWidth: target.0, notchWidth: state.notchWidth)
+                    IslandHeader(
+                        state: state,
+                        notchLeading: wings.notchLeading,
+                        notchTrailing: wings.notchTrailing,
+                        bandWidth: target.0
+                    )
+                    .frame(width: target.0, height: clearance.expandedOffset)
+                    .scaleEffect(scale, anchor: .top)
+                    .frame(width: islandWidth, height: clearance.expandedOffset, alignment: .center)
+                    .opacity(drawnView == .confused ? 0 : contentShown)
+                    .allowsHitTesting(state.mode == .expanded && contentShown > 0.9 && drawnView != .confused)
+                }
+            }
+            .frame(width: islandWidth, height: islandHeight, alignment: .topLeading)
+        }
+    }
+
+    // Single BotPlacement stays beside this page in the island stack.
+
+    /// Closed-notch media shelf and the live-activity line.
+    @ViewBuilder
+    private func closedNotices(showMedia: Bool, earY: CGFloat) -> some View {
+        ZStack(alignment: .topLeading) {
+            if state.mode != .expanded, !hud.visible {
+                let kind = IslandMotion.shelf(playing: showMedia, pointerOnNotch: board.pointerOnNotch)
+                if kind != .faces {
+                    NotchMediaShelf(
+                        board: board,
+                        islandWidth: islandWidth,
+                        contentCenterY: earY
+                    )
+                    .frame(width: islandWidth, height: islandHeight)
+                }
+            }
+
+            if state.mode != .expanded, !hud.visible, let edge = edgeHeadline {
+                closedNoticePill(edge, earY: earY)
+            }
+        }
+        .frame(width: islandWidth, height: islandHeight, alignment: .topLeading)
+    }
+
+    @ViewBuilder
+    private func closedNoticePill(_ edge: NookHeadline, earY: CGFloat) -> some View {
+        ZStack(alignment: .topLeading) {
+            if edge.id == "tray", board.trayWing > 0 {
+            LiveActivityPill(headline: edge)
+                .frame(maxWidth: max(24, board.trayWing - 8))
+                .position(
+                    x: NookLayout.trayPillCenterX(side: board.trayWing),
+                    y: NookLayout.collapsedAnchorY(housingCenter: earY)
+                )
+        } else if edge.id == "media", state.hasNotch {
+            let placed = NookPlayback.mediaTitlePlacement(
+                islandWidth: islandWidth,
+                notchWidth: state.notchWidth
+            )
+            if placed.maxWidth > 0 {
+                LiveActivityPill(headline: edge)
+                    .frame(width: placed.maxWidth, alignment: .leading)
+                    .clipped()
+                    .position(
+                        x: placed.centerX,
+                        y: NookLayout.collapsedAnchorY(housingCenter: earY)
+                    )
+            }
+        } else if edge.id != "tray" {
+            let inNotch = board.restingExtra <= 0
+            LiveActivityPill(headline: edge)
+                .frame(maxWidth: inNotch ? max(40, islandWidth - 28) : max(80, board.restingExtra - 16))
+                .position(
+                    x: inNotch ? islandWidth / 2 : islandWidth - board.restingExtra / 2,
+                    y: NookLayout.collapsedAnchorY(housingCenter: earY)
+                )
+            }
+        }
+        .frame(width: islandWidth, height: islandHeight, alignment: .topLeading)
+    }
+
+    /// Volume and brightness strip. It takes the wing while it is on screen.
+    @ViewBuilder
+    private func notchHud(clearance: NotchClearance, earY: CGFloat, bandCenter: CGFloat) -> some View {
+        ZStack(alignment: .topLeading) {
+            if hud.visible {
+                let hudWing: CGFloat = state.mode == .expanded ? 0 : HudBehavior.wing
+                let openWidth = displayedSize(mode: state.mode, view: state.view).0
+                let restingWidth = openWidth - IslandMotion.balancedWidth(side: hudWing)
+                let showStrip = HudBehavior.stripShown(
+                    showing: true,
+                    shapeWidth: islandWidth,
+                    restingWidth: restingWidth,
+                    openWidth: openWidth
+                )
+                if showStrip {
+                    HudStrip(title: hud.title, symbol: hud.symbol, percent: hud.percent, fraction: hud.fraction)
+                        .frame(width: HudBehavior.wing, height: 28)
+                        .position(
+                            x: state.mode == .expanded
+                                ? islandWidth / 2
+                                : HudBehavior.stripCenterX(islandWidth: islandWidth, wing: HudBehavior.wing),
+                            y: state.mode == .expanded
+                                ? (clearance.expandedOffset > 0 ? bandCenter : 22)
+                                : NookLayout.collapsedAnchorY(housingCenter: earY)
+                        )
+                }
+            }
+        }
+        .frame(width: islandWidth, height: islandHeight, alignment: .topLeading)
     }
 
     /// Scale of the settled panel inside the shape that is on screen right now.
@@ -780,8 +857,39 @@ struct IslandContentView: View {
 
 // MARK: - Island header (tabs + icons)
 
+/// Closed-notch lamp. The blue dot means an event is soon or a timer reached zero.
+private struct ClosedNookLamp: View {
+    var centerX: CGFloat
+    var centerY: CGFloat
+    var hint: String
+
+    var body: some View {
+        Button {
+            NotificationCenter.default.post(name: .openNookPage, object: nil)
+        } label: {
+            ZStack(alignment: .topTrailing) {
+                Image(systemName: "lamp.desk.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color(hex: "#F5F6F8"))
+                Circle()
+                    .fill(Color(hex: "#4C8DFF"))
+                    .frame(width: 6, height: 6)
+                    .offset(x: 3, y: -3)
+            }
+            .frame(width: 22, height: 22)
+        }
+        .buttonStyle(.plain)
+        .frame(width: 22, height: 22)
+        .position(x: centerX, y: centerY)
+        .help(hint)
+        .accessibilityLabel("Nook")
+        .accessibilityHint(hint)
+    }
+}
+
 struct IslandHeader: View {
     @ObservedObject var state: AppState
+    @ObservedObject private var board = NookBoard.shared
     /// Set when the row lives in the menu bar, beside the hardware notch.
     var notchLeading: CGFloat? = nil
     var notchTrailing: CGFloat? = nil
@@ -818,9 +926,10 @@ struct IslandHeader: View {
     private var tabs: some View {
         HStack(spacing: 5) {
             TabButton(icon: "house.fill", view: .overview, state: state)
-            TabButton(icon: "lamp.desk.fill", view: .nook, state: state)
-                .help("Nook")
+            TabButton(icon: "lamp.desk.fill", view: .nook, state: state, marked: board.lampMarked)
+                .help(board.lampMarked ? board.lampHint : "Nook")
                 .accessibilityLabel("Nook")
+                .accessibilityHint(board.lampMarked ? board.lampHint : "Opens the Nook")
             TabButton(icon: "tray.fill", view: .tray, state: state)
                 .help("Tray")
                 .accessibilityLabel("Tray")
@@ -868,6 +977,7 @@ struct TabButton: View {
     let view: IslandView
     @ObservedObject var state: AppState
     var preAction: (() -> Void)? = nil
+    var marked: Bool = false
     @State private var isHovered = false
 
     private var isOn: Bool {
@@ -891,6 +1001,14 @@ struct TabButton: View {
                     isHovered ? Color.white.opacity(0.07) : Color.clear
                 )
                 .clipShape(Capsule())
+                .overlay(alignment: .topTrailing) {
+                    if marked {
+                        Circle()
+                            .fill(Color(hex: "#4C8DFF"))
+                            .frame(width: 6, height: 6)
+                            .offset(x: 1, y: -1)
+                    }
+                }
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }

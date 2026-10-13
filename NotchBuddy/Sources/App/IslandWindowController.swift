@@ -40,6 +40,12 @@ final class IslandWindowController: NSWindowController {
     // Window attach drag (M8)
     private var attachDragStart: NSPoint? = nil
     private var pendingIslandClick = false   // any island click → expand on mouseUp
+    /// Closed-notch color under the press. The faces unmount when the notch opens, so the gesture never ends.
+    private var blobPressID: String?
+    private var blobPressAt: Date?
+    /// The closed blob under the pointer. Hover can open the notch before the click lands.
+    private var closedAimID: String?
+    private var closedAimAt: Date?
     private var pendingExpandView: IslandView?
     private var pipelineDrag = false
     private var inAttachDrag = false
@@ -415,6 +421,11 @@ final class IslandWindowController: NSWindowController {
             desk.releasePageLock()
         }
 
+        if state.mode != .expanded, let slot = closedTerminalBlob(at: mouse) {
+            closedAimID = slot
+            closedAimAt = Date()
+        }
+
         // Feed FSM hover enter/leave
         if !typingLock && inIsland && !wasInIsland {
             guard !inAttachDrag else { wasInIsland = inIsland; return }
@@ -424,6 +435,9 @@ final class IslandWindowController: NSWindowController {
             }
             fsm.mouseEntered()
             if prefs.alwaysOpenOnHover && settingsPreview == .none && (fsm.state == .petit || fsm.state == .hidden) {
+                if let slot = closedAimID ?? closedTerminalBlob(at: mouse) {
+                    TerminalDesk.shared.armSelection(slot)
+                }
                 fsm.click()
             }
         }
@@ -668,6 +682,22 @@ final class IslandWindowController: NSWindowController {
 
     // MARK: - Keyboard (Escape closes)
 
+    /// A short press focuses. A hold opens that color in its corner.
+    /// The pointer can leave the notch before the mouse comes up.
+    private func finishBlobPress() {
+        let pressedBlob = blobPressID
+        let pressedAt = blobPressAt
+        blobPressID = nil
+        blobPressAt = nil
+        guard let slot = pressedBlob, settingsPreview == .none else { return }
+        let held = pressedAt.map { Date().timeIntervalSince($0) } ?? 0
+        TerminalDesk.shared.armSelection(slot)
+        switch TerminalBehavior.blobPress(held: held) {
+        case .focus: TerminalDesk.shared.focus(slot)
+        case .tile: TerminalDesk.shared.openOrFocus(slot)
+        }
+    }
+
     private func startKeyMonitor() {
         NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
             MainActor.assumeIsolated { self?.handleNotchScroll(event) }
@@ -716,6 +746,10 @@ final class IslandWindowController: NSWindowController {
             guard let self, self.settingsPreview == .none else { return }
             self.collapse()
         }
+        NotificationCenter.default.addObserver(forName: .openNookPage, object: nil, queue: .main) { [weak self] _ in
+            guard let self, self.settingsPreview == .none else { return }
+            self.openNook()
+        }
 
         NotificationCenter.default.addObserver(forName: .settingsNotchPreview, object: nil, queue: .main) { [weak self] note in
             let tab = note.object as? String ?? "closed"
@@ -739,8 +773,25 @@ final class IslandWindowController: NSWindowController {
                         NotchClickDelivery.prepare(panel)
                     }
                 }
-                guard self.wasInIsland else { return }
+                let screen = NSEvent.mouseLocation
+                let openHit: String? = {
+                    guard self.state.mode == .expanded, let panel = self.window else { return nil }
+                    let local = CGPoint(x: screen.x - panel.frame.minX, y: screen.y - panel.frame.minY)
+                    return self.terminalBlob(at: local)
+                }()
+                let closedHit = self.state.mode == .expanded ? nil : self.closedTerminalBlob(at: screen)
+                let aimFresh = self.closedAimAt.map { Date().timeIntervalSince($0) < 0.45 } ?? false
+                let slot = openHit ?? closedHit ?? (aimFresh ? self.closedAimID : nil)
+                // The hover poll can still be false on the click that lands. A hit blob still counts.
+                guard self.wasInIsland || slot != nil else { return }
                 self.pendingIslandClick = true
+                self.blobPressID = nil
+                self.blobPressAt = nil
+                if let slot {
+                    self.blobPressID = slot
+                    self.blobPressAt = Date()
+                    TerminalDesk.shared.armSelection(slot)
+                }
                 self.hoverTimer?.cancel()
                 self.botHoverTimer?.cancel()
                 self.botHovering = false
@@ -792,9 +843,12 @@ final class IslandWindowController: NSWindowController {
                 let wasDragging     = self.inAttachDrag
                 self.pendingIslandClick = false
                 if wasDragging {
+                    self.blobPressID = nil
+                    self.blobPressAt = nil
                     finishDrag()
                 } else {
                     self.attachDragStart = nil
+                    self.finishBlobPress()
                     if hadPendingClick && self.settingsPreview == .none && self.state.mode != .expanded && NookPreferences.shared.nookEnabled {
                         if self.fsm.state == .home {
                             // FSM already thinks it's open (e.g. the view folded it): just reopen.
@@ -807,7 +861,10 @@ final class IslandWindowController: NSWindowController {
             }
             return event
         }
-        NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) { _ in
+        NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.finishBlobPress()
+            }
             finishDrag()
         }
 
@@ -1017,6 +1074,34 @@ final class IslandWindowController: NSWindowController {
     }
 
     // MARK: - Coordinate conversion: window (AppKit, y-up) → island coords (y-down, 0,0 = island top-left)
+
+    /// The closed-notch color under a screen point. The open drawer uses `terminalBlob`.
+    func closedTerminalBlob(at screenPoint: CGPoint) -> String? {
+        guard state.mode != .expanded, let panel = window else { return nil }
+        let (islandW, islandH) = islandSize(
+            mode: state.mode,
+            view: state.view,
+            progress: state.uploadProgress,
+            nw: notchW,
+            nh: notchH,
+            hasNotch: state.hasNotch
+        )
+        let local = CGPoint(x: screenPoint.x - panel.frame.minX, y: screenPoint.y - panel.frame.minY)
+        let islandLeft = IslandMotion.centeredOrigin(panelWidth: panel.frame.width, islandWidth: islandW)
+        let clearance = NotchClearance(occludedHeight: state.hasNotch ? notchH : 0)
+        let earHeight = clearance.expandedOffset > 0 ? clearance.expandedOffset : islandH
+        let centers = TerminalBehavior.collapsedBlobCenters(
+            islandWidth: islandW,
+            notchWidth: state.hasNotch ? notchW : 0
+        )
+        return TerminalBehavior.collapsedBlobSlot(
+            x: local.x - islandLeft,
+            y: panel.frame.height - local.y,
+            centerX: centers.facesX,
+            centerY: clearance.earCenterY(fallback: islandH),
+            scale: IslandRestingLayout(width: islandW, height: earHeight).miniGridScale
+        )
+    }
 
     /// The terminal face under a window-local drag point, only on this page.
     func terminalBlob(at windowPoint: CGPoint) -> String? {
@@ -1488,6 +1573,7 @@ extension Notification.Name {
     static let botMorphTo       = Notification.Name("notchBuddy.botMorphTo")
     static let islandAction     = Notification.Name("notchBuddy.islandAction")
     static let islandCollapse   = Notification.Name("notchBuddy.islandCollapse")
+    static let openNookPage     = Notification.Name("notchBuddy.openNookPage")
     static let settingsNotchPreview = Notification.Name("notchBuddy.settingsNotchPreview")
     static let openFullSettings = Notification.Name("notchBuddy.openFullSettings")
     static let hookReveal       = Notification.Name("notchBuddy.hookReveal")
@@ -1523,11 +1609,22 @@ func islandSize(mode: IslandMode, view: IslandView,
         if view == .nook || view == .tray {
             let prefs = NookPreferences.shared
             let columns = prefs.widgets.filter(\.enabled).map { NookColumnSpec(id: $0.id, cells: $0.cells) }
-            width = NookLayout.nookDrawerWidth(
-                columns: columns,
-                dividers: prefs.widgetDividers,
-                contentPadding: CGFloat(prefs.contentPadding)
-            )
+            let padding = CGFloat(prefs.contentPadding)
+            if view == .nook {
+                let mediaLive = NookLayout.mediaIsLive(title: board.mediaTitle)
+                width = NookLayout.nookDrawerWidth(
+                    columns: columns,
+                    dividers: prefs.widgetDividers,
+                    contentPadding: padding,
+                    mediaLive: mediaLive
+                )
+            } else {
+                width = NookLayout.nookDrawerWidth(
+                    columns: columns,
+                    dividers: prefs.widgetDividers,
+                    contentPadding: padding
+                )
+            }
         } else {
             width = IslandConst.expandedWidth
         }

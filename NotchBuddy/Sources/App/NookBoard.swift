@@ -35,7 +35,15 @@ final class NookBoard: ObservableObject {
     @Published var artworkToken = 0
     @Published var mediaPosition: Double = 0
     @Published var mediaDuration: Double = 0
+    /// Last title that actually played. Stays after the session clears so Play can resume it.
+    @Published var lastTrack: NookLayout.NookLastTrack?
     @Published var events: [NookEventFact] = []
+    /// True when an event is inside 15 minutes, or a timer the user started has reached zero.
+    @Published var lampMarked = false
+    /// Day to show when the Nook opens for that event. Nil when the lamp is only a timer.
+    @Published var lampEventDay: Date?
+    @Published var soonEvent: NookEventFact?
+    @Published var lampHint = "Opens the Nook."
     @Published var calendarDenied = false
     @Published var batteryPercent: Int?
     @Published var batteryCharging = false
@@ -60,12 +68,27 @@ final class NookBoard: ObservableObject {
     /// Left-wing width for the tray count. Zero while that line is hidden.
     @Published var trayWing: CGFloat = 0
     @Published var noteText = ""
+    /// Rich text for the same note. Empty after a code edit changes the words.
+    @Published var noteRTF = Data()
+    /// Rich text is the default. Code colors headings, emphasis, inline code, and comments.
+    @Published var noteMode: NookNoteMode = .rich
     @Published var todos: [NookTodo] = []
     @Published var timerMinutes = 5
     @Published var timerRemaining: TimeInterval?
     @Published var timerEnded = false
-    @Published var shortcutNames: [String] = []
-    @Published var nookVisible = false
+    @Published var shortcutCatalog: [NookShortcut] = []
+    /// Running, a failed run, or a failed load. Empty when there is nothing to say.
+    @Published var shortcutNote = ""
+    @Published var quickAppCatalog: [NookQuickApp] = []
+    /// A failed load or a failed open. Empty when there is nothing to say.
+    @Published var quickAppNote = ""
+    /// Bundle id of the Quick App opened last. Empty until one opens.
+    @Published var lastQuickAppID = ""
+    @Published var nookVisible = false {
+        didSet {
+            if !nookVisible { quickAppsLoaded = false }
+        }
+    }
     /// True while the pointer is inside the notch shape. Drives the media peek.
     @Published var pointerOnNotch = false
 
@@ -75,6 +98,8 @@ final class NookBoard: ObservableObject {
     private var tickCount = 0
     private var askedCalendar = false
     private var shortcutsLoaded = false
+    private var quickAppsLoaded = false
+    private var shortcutRun: Task<Void, Never>?
     private var pointerInside = false
     private var revealed = true
     private var lastInteraction = Date()
@@ -85,18 +110,31 @@ final class NookBoard: ObservableObject {
     private var artworkStamp = 0
     private var mediaUsesRemote = false
     private var updateAvailable = false
+    /// Last release that answered. A failed check leaves this as it was.
+    @Published private(set) var offeredVersion: String?
+    @Published private(set) var releasePage: String?
+    @Published private(set) var updateChecking = false
+    @Published private(set) var updateChecked = false
+    private var updateGeneration = 0
+    private var updateTask: Task<Void, Never>?
     private var persistReady = false
     private var lastAirDropPaths: [String] = []
     private var lastAirDropAt = Date.distantPast
     private var trayNoticeTask: Task<Void, Never>?
+    /// The open note field. Formatting buttons use it while the menu has focus.
+    weak var noteView: NookNoteNSTextView?
+    private var savedSelection = NSRange(location: 0, length: 0)
+    private var droppedDoneTodos = false
 
     private init() {
         loadPersisted()
         persistReady = true
+        if droppedDoneTodos { saveTodos() }
     }
 
     func start() {
         guard loop == nil else { return }
+        checkForUpdate()
         NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification,
             object: nil,
@@ -340,6 +378,31 @@ final class NookBoard: ObservableObject {
         }
     }
 
+    func resumeLast() {
+        guard let lastTrack, let action = NookLayout.resume(lastTrack) else { return }
+        switch action {
+        case .remote:
+            Task.detached { SystemNowPlaying.toggle() }
+        case .player(let source, let bundleID):
+            if bundleID.isEmpty || !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty {
+                Task.detached { NowPlayingProbe.pause(source: source) }
+            } else if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+                NSWorkspace.shared.open(url)
+            } else {
+                Task.detached { NowPlayingProbe.pause(source: source) }
+            }
+        case .open(let bundleID):
+            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+                NSWorkspace.shared.open(url)
+            }
+        }
+    }
+
+    func openCalendarEvent(_ event: NookEventFact) {
+        guard let url = NookLayout.calendarShowURL(start: event.start) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
     func openApp(_ name: String) {
         let platform: NookMediaPlatform
         switch name {
@@ -378,28 +441,337 @@ final class NookBoard: ObservableObject {
         saveTodos()
     }
 
-    func toggleTodo(_ id: UUID) {
-        guard let index = todos.firstIndex(where: { $0.id == id }) else { return }
-        todos[index].done.toggle()
+    func finishTodo(_ id: UUID) {
+        guard let index = todos.firstIndex(where: { $0.id == id }), !todos[index].done else { return }
+        todos[index].done = true
         saveTodos()
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 320_000_000)
+            todos.removeAll { $0.id == id && $0.done }
+            saveTodos()
+        }
+    }
+
+    func setNoteMode(_ mode: NookNoteMode) {
+        guard mode != noteMode else { return }
+        if let view = noteView, noteMode == .rich {
+            noteText = view.string
+            let length = (view.string as NSString).length
+            if let data = view.rtf(from: NSRange(location: 0, length: length)) {
+                noteRTF = data
+            }
+        }
+        noteMode = mode
+        if let view = noteView {
+            view.renderedMode = nil
+            renderNote(in: view)
+        }
+        saveNote()
+    }
+
+    func toggleNoteBold() { toggleNoteTrait(.boldFontMask) }
+    func toggleNoteItalic() { toggleNoteTrait(.italicFontMask) }
+
+    func toggleNoteUnderline() {
+        guard noteMode == .rich, let view = noteView, let storage = view.textStorage else { return }
+        let range = activeNoteRange(in: view)
+        guard range.length > 0 else { return }
+        var fullyUnderlined = true
+        storage.enumerateAttribute(.underlineStyle, in: range) { value, _, _ in
+            let style = (value as? Int) ?? (value as? NSNumber)?.intValue ?? 0
+            if style == 0 { fullyUnderlined = false }
+        }
+        let next = fullyUnderlined ? 0 : NSUnderlineStyle.single.rawValue
+        storage.beginEditing()
+        storage.addAttribute(.underlineStyle, value: next, range: range)
+        storage.endEditing()
+        noteEdited(in: view)
+    }
+
+    func noteSelectionChanged(in view: NSTextView) {
+        savedSelection = view.selectedRange()
+    }
+
+    func noteEdited(in view: NookNoteNSTextView) {
+        guard !view.suppressChange else { return }
+        let plain = view.string
+        if noteMode == .code {
+            if !noteRTF.isEmpty {
+                let stored = NSAttributedString(rtf: noteRTF, documentAttributes: nil)?.string
+                if stored != plain { noteRTF = Data() }
+            }
+            noteText = plain
+            let selected = view.selectedRange()
+            view.suppressChange = true
+            paintCode(in: view, selection: selected)
+            view.suppressChange = false
+        } else {
+            noteText = plain
+            let length = (plain as NSString).length
+            noteRTF = view.rtf(from: NSRange(location: 0, length: length)) ?? Data()
+        }
+        view.renderedMode = noteMode
+        view.renderedRTF = noteRTF
+        saveNote()
+    }
+
+    /// Shows the saved note. Skips a field the person is typing in when the words already match.
+    func renderNote(in view: NookNoteNSTextView) {
+        noteView = view
+        let editing = view.window?.firstResponder === view
+        if view.renderedMode == noteMode && view.string == noteText {
+            if editing || view.renderedRTF == noteRTF { return }
+        }
+        let selected = view.selectedRange()
+        view.suppressChange = true
+        if noteMode == .code {
+            paintCode(in: view, selection: selected)
+        } else {
+            paintRich(in: view, selection: selected)
+        }
+        view.renderedMode = noteMode
+        view.renderedRTF = noteRTF
+        view.suppressChange = false
+    }
+
+    func exportNote(_ format: NookNoteExport) {
+        if let view = noteView {
+            noteText = view.string
+            if noteMode == .rich {
+                let length = (view.string as NSString).length
+                if let data = view.rtf(from: NSRange(location: 0, length: length)) {
+                    noteRTF = data
+                }
+            }
+        }
+        let folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Coucou/notes", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let url = folder.appendingPathComponent(NookNotes.exportFilename(format))
+            switch format {
+            case .plain, .markdown:
+                let body = NookNotes.exportText(mode: noteMode, plain: noteText, format: format) ?? ""
+                try body.write(to: url, atomically: true, encoding: .utf8)
+            case .richText:
+                try exportRTF().write(to: url, options: .atomic)
+            }
+            saveNote()
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        } catch {
+            return
+        }
     }
 
     func saveNote() {
         guard persistReady else { return }
         defaults.set(noteText, forKey: "nook.noteText")
+        defaults.set(noteRTF, forKey: "nook.noteRTF")
+        defaults.set(noteMode.rawValue, forKey: "nook.noteMode")
+    }
+
+    private func toggleNoteTrait(_ trait: NSFontTraitMask) {
+        guard noteMode == .rich, let view = noteView, let storage = view.textStorage else { return }
+        let range = activeNoteRange(in: view)
+        guard range.length > 0 else { return }
+        let manager = NSFontManager.shared
+        storage.beginEditing()
+        storage.enumerateAttribute(.font, in: range) { value, subrange, _ in
+            let current = (value as? NSFont) ?? NSFont.systemFont(ofSize: 13, weight: .medium)
+            let hasTrait = manager.traits(of: current).contains(trait)
+            let next = hasTrait
+                ? manager.convert(current, toNotHaveTrait: trait)
+                : manager.convert(current, toHaveTrait: trait)
+            storage.addAttribute(.font, value: next, range: subrange)
+        }
+        storage.endEditing()
+        noteEdited(in: view)
+    }
+
+    private func activeNoteRange(in view: NSTextView) -> NSRange {
+        let live = view.selectedRange()
+        if live.length > 0 { return live }
+        let length = (view.string as NSString).length
+        guard savedSelection.location <= length else { return NSRange(location: length, length: 0) }
+        let available = length - savedSelection.location
+        return NSRange(location: savedSelection.location, length: min(savedSelection.length, available))
+    }
+
+    private func paintCode(in view: NookNoteNSTextView, selection: NSRange) {
+        if view.string != noteText { view.string = noteText }
+        guard let storage = view.textStorage else { return }
+        let base = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let baseColor = NSColor(srgbRed: 0.96, green: 0.96, blue: 0.97, alpha: 1)
+        storage.beginEditing()
+        let full = NSRange(location: 0, length: storage.length)
+        if full.length > 0 {
+            storage.setAttributes([.font: base, .foregroundColor: baseColor], range: full)
+        }
+        let order: [NookNoteSpan.Kind] = [.heading, .emphasis, .comment, .code]
+        let spans = NookNotes.highlight(view.string)
+        for kind in order {
+            for span in spans where span.kind == kind {
+                guard span.end > span.start else { continue }
+                let range = NSRange(location: span.start, length: span.end - span.start)
+                guard NSMaxRange(range) <= storage.length else { continue }
+                storage.addAttributes(codeAttributes(kind), range: range)
+            }
+        }
+        storage.endEditing()
+        view.typingAttributes = [.font: base, .foregroundColor: baseColor]
+        view.setSelectedRange(clampedNoteRange(selection, length: storage.length))
+    }
+
+    private func paintRich(in view: NookNoteNSTextView, selection: NSRange) {
+        let font = NSFont.systemFont(ofSize: 13, weight: .medium)
+        let color = NSColor(srgbRed: 0.96, green: 0.965, blue: 0.973, alpha: 1)
+        if !noteRTF.isEmpty,
+           let stored = NSAttributedString(rtf: noteRTF, documentAttributes: nil),
+           stored.string == noteText {
+            view.textStorage?.setAttributedString(stored)
+        } else {
+            let plain = NSAttributedString(string: noteText, attributes: [
+                .font: font,
+                .foregroundColor: color
+            ])
+            view.textStorage?.setAttributedString(plain)
+        }
+        view.typingAttributes = [.font: font, .foregroundColor: color]
+        let length = view.textStorage?.length ?? (view.string as NSString).length
+        view.setSelectedRange(clampedNoteRange(selection, length: length))
+    }
+
+    private func codeAttributes(_ kind: NookNoteSpan.Kind) -> [NSAttributedString.Key: Any] {
+        let size: CGFloat = 12
+        switch kind {
+        case .heading:
+            return [
+                .font: NSFont.monospacedSystemFont(ofSize: size, weight: .semibold),
+                .foregroundColor: NSColor(srgbRed: 0.98, green: 0.78, blue: 0.42, alpha: 1)
+            ]
+        case .emphasis:
+            return [
+                .font: NSFont.monospacedSystemFont(ofSize: size, weight: .bold),
+                .foregroundColor: NSColor(srgbRed: 0.80, green: 0.72, blue: 0.98, alpha: 1)
+            ]
+        case .code:
+            return [
+                .font: NSFont.monospacedSystemFont(ofSize: size, weight: .medium),
+                .foregroundColor: NSColor(srgbRed: 0.45, green: 0.88, blue: 0.74, alpha: 1)
+            ]
+        case .comment:
+            return [
+                .font: NSFont.monospacedSystemFont(ofSize: size, weight: .regular),
+                .foregroundColor: NSColor(srgbRed: 0.67, green: 0.72, blue: 0.78, alpha: 1)
+            ]
+        }
+    }
+
+    private func clampedNoteRange(_ range: NSRange, length: Int) -> NSRange {
+        let location = min(max(0, range.location), length)
+        let span = min(max(0, range.length), length - location)
+        return NSRange(location: location, length: span)
+    }
+
+    /// Rich text for TextEdit: keep bold, italic, and underline, and drop the light notch color.
+    private func exportRTF() -> Data {
+        let source: NSAttributedString
+        if noteMode == .rich, let view = noteView {
+            source = view.attributedString()
+        } else if !noteRTF.isEmpty,
+                  let stored = NSAttributedString(rtf: noteRTF, documentAttributes: nil),
+                  stored.string == noteText {
+            source = stored
+        } else {
+            source = NSAttributedString(string: noteText, attributes: [
+                .font: NSFont.systemFont(ofSize: 13)
+            ])
+        }
+        let copy = NSMutableAttributedString(attributedString: source)
+        let full = NSRange(location: 0, length: copy.length)
+        if full.length > 0 {
+            copy.removeAttribute(.foregroundColor, range: full)
+            if copy.attribute(.font, at: 0, effectiveRange: nil) == nil {
+                copy.addAttribute(.font, value: NSFont.systemFont(ofSize: 13), range: full)
+            }
+        }
+        return copy.rtf(from: full) ?? Data(noteText.utf8)
     }
 
     func loadShortcutsIfNeeded() async {
-        guard nookVisible, !shortcutsLoaded else { return }
+        guard nookVisible else {
+            shortcutsLoaded = false
+            return
+        }
+        guard !shortcutsLoaded else { return }
         let enabled = NookPreferences.shared.widgets.contains { $0.id == "shortcuts" && $0.enabled }
         guard enabled else { return }
         shortcutsLoaded = true
-        let names = await Task.detached { ShortcutProbe.list() }.value
-        shortcutNames = names
+        await refreshShortcutCatalog()
     }
 
-    func runShortcut(_ name: String) {
-        Task.detached { ShortcutProbe.run(name) }
+    func refreshShortcutCatalog() async {
+        let load = await Task.detached { ShortcutProbe.catalog() }.value
+        shortcutCatalog = load.shortcuts
+        if load.failed {
+            shortcutNote = NookShortcuts.loadFailed
+            return
+        }
+        if shortcutNote == NookShortcuts.loadFailed { shortcutNote = "" }
+        let prefs = NookPreferences.shared
+        let kept = NookShortcuts.keptPicks(prefs.shortcutPicks, catalog: load.shortcuts)
+        if kept != prefs.shortcutPicks { prefs.setShortcutPicks(kept) }
+    }
+
+    func runShortcut(_ shortcut: NookShortcut) {
+        shortcutRun?.cancel()
+        shortcutNote = NookShortcuts.runningNote(shortcut.name)
+        let identifier = shortcut.identifier
+        let name = shortcut.name
+        shortcutRun = Task {
+            let code = await Task.detached { ShortcutProbe.run(identifier) }.value
+            guard !Task.isCancelled else { return }
+            shortcutNote = NookShortcuts.finishedNote(name: name, exitCode: code)
+        }
+    }
+
+    /// One scan each time the nook opens with Quick Apps on. Refresh and the picker scan on their own.
+    func loadQuickAppsIfNeeded() async {
+        guard nookVisible else {
+            quickAppsLoaded = false
+            return
+        }
+        guard !quickAppsLoaded else { return }
+        let enabled = NookPreferences.shared.widgets.contains { $0.id == "quickApps" && $0.enabled }
+        guard enabled else { return }
+        quickAppsLoaded = true
+        await refreshQuickAppCatalog()
+    }
+
+    func refreshQuickAppCatalog() async {
+        let load = await Task.detached { QuickAppProbe.catalog() }.value
+        quickAppCatalog = load.apps
+        if load.failed {
+            quickAppNote = NookQuickApps.loadFailed
+            return
+        }
+        if quickAppNote == NookQuickApps.loadFailed { quickAppNote = "" }
+        let prefs = NookPreferences.shared
+        let kept = NookQuickApps.keptPicks(prefs.quickAppPicks, catalog: load.apps)
+        if kept != prefs.quickAppPicks { prefs.setQuickAppPicks(kept) }
+    }
+
+    func openQuickApp(_ app: NookQuickApp) {
+        let missed = "\(app.name) could not be opened."
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: app.bundleID),
+              NSWorkspace.shared.open(url) else {
+            quickAppNote = missed
+            return
+        }
+        if quickAppNote == missed { quickAppNote = "" }
+        guard lastQuickAppID != app.bundleID else { return }
+        lastQuickAppID = app.bundleID
+        defaults.set(app.bundleID, forKey: "nook.lastQuickApp")
     }
 
     // MARK: - Tick
@@ -412,7 +784,10 @@ final class NookBoard: ObservableObject {
         if tickCount % 15 == 0 || (nookVisible && events.isEmpty && !askedCalendar) {
             await refreshCalendar()
         }
-        if nookVisible { await loadShortcutsIfNeeded() }
+        if nookVisible {
+            await loadShortcutsIfNeeded()
+            await loadQuickAppsIfNeeded()
+        }
         tickCount += 1
         publish()
     }
@@ -444,9 +819,29 @@ final class NookBoard: ObservableObject {
             mediaPosition = snap.position
             mediaDuration = snap.duration
             if artChanged { artworkToken += 1 }
+            rememberTrack(
+                title: snap.title,
+                artist: snap.artist,
+                source: snap.source,
+                usesRemote: snap.usesRemote,
+                bundleID: snap.bundleID
+            )
         } else {
             clearMedia()
         }
+    }
+
+    private func rememberTrack(title: String, artist: String, source: String, usesRemote: Bool, bundleID: String) {
+        guard let track = NookLayout.rememberedTrack(
+            title: title,
+            artist: artist,
+            source: source,
+            usesRemote: usesRemote,
+            bundleID: bundleID
+        ) else { return }
+        guard track != lastTrack else { return }
+        lastTrack = track
+        saveLastTrack()
     }
 
     private func clearMedia() {
@@ -550,10 +945,36 @@ final class NookBoard: ObservableObject {
         }
     }
 
+    /// One look at the published release. The notch tick only reads what this stored.
+    func checkForUpdate() {
+        updateGeneration += 1
+        let generation = updateGeneration
+        updateTask?.cancel()
+        updateChecking = true
+        updateTask = Task { @MainActor [weak self] in
+            let offer = await ReleaseProbe.latest()
+            guard let self, generation == self.updateGeneration else { return }
+            if let offer {
+                self.offeredVersion = offer.version
+                self.releasePage = offer.page
+            }
+            self.updateChecking = false
+            self.updateChecked = true
+            self.updateTask = nil
+            self.publish()
+        }
+    }
+
+    func openReleasePage() {
+        let page = releasePage ?? LiveActivityBehavior.releasesPage
+        guard let url = URL(string: page), url.scheme == "https" else { return }
+        NSWorkspace.shared.open(url)
+    }
+
     private func publish() {
         let prefs = NookPreferences.shared
         let installed = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
-        updateAvailable = LiveActivityBehavior.updateIsAvailable(installed: installed, offered: nil)
+        updateAvailable = LiveActivityBehavior.updateIsAvailable(installed: installed, offered: offeredVersion)
         considerHide(prefs)
         let facts = NookActivityFacts(
             mediaTitle: NookLayout.publishedMediaTitle(isPlaying: mediaIsPlaying, title: mediaTitle),
@@ -582,6 +1003,7 @@ final class NookBoard: ObservableObject {
         let shown = activitiesShown(prefs) && revealed
         let line = NookLayout.headline(facts: facts, enabled: enabled, revealed: shown)
         if line != headline { headline = line }
+        refreshLamp(prefs)
         let extra: CGFloat
         if dropWing {
             extra = NookLayout.wingWidth(slider: prefs.dropAreaWidth)
@@ -693,10 +1115,21 @@ final class NookBoard: ObservableObject {
 
     private func loadPersisted() {
         if let text = defaults.string(forKey: "nook.noteText") { noteText = text }
+        if let data = defaults.data(forKey: "nook.noteRTF") { noteRTF = data }
+        if defaults.string(forKey: "nook.noteMode") == NookNoteMode.code.rawValue {
+            noteMode = .code
+        }
         if let data = defaults.data(forKey: "nook.todos"),
            let saved = try? JSONDecoder().decode([NookTodo].self, from: data) {
-            todos = saved
+            let open = saved.filter { !$0.done }
+            todos = open
+            droppedDoneTodos = open.count != saved.count
         }
+        if let data = defaults.data(forKey: "nook.lastTrack"),
+           let saved = try? JSONDecoder().decode(NookLayout.NookLastTrack.self, from: data) {
+            lastTrack = saved
+        }
+        lastQuickAppID = defaults.string(forKey: "nook.lastQuickApp") ?? ""
         if let data = defaults.data(forKey: "nook.trayFiles"),
            let saved = try? JSONDecoder().decode([NookLayout.TrayItem].self, from: data) {
             tray = saved.filter { FileManager.default.fileExists(atPath: $0.path) }
@@ -715,6 +1148,37 @@ final class NookBoard: ObservableObject {
         if let data = try? JSONEncoder().encode(todos) {
             defaults.set(data, forKey: "nook.todos")
         }
+    }
+
+    private func saveLastTrack() {
+        guard persistReady else { return }
+        if let lastTrack, let data = try? JSONEncoder().encode(lastTrack) {
+            defaults.set(data, forKey: "nook.lastTrack")
+        }
+    }
+
+    private func refreshLamp(_ prefs: NookPreferences) {
+        let now = Date()
+        let visible = events.filter { event in
+            NookLayout.includeEvent(
+                event,
+                now: now,
+                allowedCalendarIDs: prefs.enabledCalendarIDs,
+                showPast: prefs.showPastEvents,
+                showAllDay: prefs.showAllDayEvents,
+                showMultiDay: prefs.showMultiDayEvents,
+                daysBehind: Int(prefs.daysBehind),
+                daysAhead: Int(prefs.daysAhead)
+            )
+        }
+        let soon = NookLayout.soonEvent(now: now, events: visible)
+        let marked = NookLayout.lampMarked(timerEnded: timerEnded, soon: soon)
+        if marked != lampMarked { lampMarked = marked }
+        if soon != soonEvent { soonEvent = soon }
+        let day = soon.map { Calendar.current.startOfDay(for: $0.start) }
+        if day != lampEventDay { lampEventDay = day }
+        let hint = NookLayout.lampHint(timerEnded: timerEnded, eventTitle: soon?.title)
+        if hint != lampHint { lampHint = hint }
     }
 }
 
@@ -1629,29 +2093,118 @@ enum LogicStemSplitter {
     """
 }
 
+enum ReleaseProbe {
+    nonisolated static func latest() async -> LiveActivityBehavior.PublishedRelease? {
+        guard let url = URL(string: LiveActivityBehavior.releaseAPI) else { return nil }
+        var request = URLRequest(url: url, timeoutInterval: 12)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("Coucou", forHTTPHeaderField: "User-Agent")
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        return LiveActivityBehavior.publishedRelease(json: data)
+    }
+}
+
 enum ShortcutProbe {
-    nonisolated static func list() -> [String] {
+    struct Load: Equatable, Sendable {
+        var shortcuts: [NookShortcut]
+        var failed: Bool
+    }
+
+    nonisolated static func catalog() -> Load {
+        let folders = command(["list", "--folders"])
+        guard folders.status == 0 else { return Load(shortcuts: [], failed: true) }
+        let unfiled = command(["list", "--folder-name", "none", "--show-identifiers"])
+        guard unfiled.status == 0 else { return Load(shortcuts: [], failed: true) }
+        var groups: [(folder: String, lines: [String])] = [("", unfiled.lines)]
+        for folder in folders.lines {
+            let filed = command(["list", "--folder-name", folder, "--show-identifiers"])
+            guard filed.status == 0 else { return Load(shortcuts: [], failed: true) }
+            groups.append((folder, filed.lines))
+        }
+        return Load(shortcuts: NookShortcuts.catalog(groups: groups), failed: false)
+    }
+
+    /// Runs one shortcut and waits. Zero means it finished.
+    nonisolated static func run(_ identifier: String) -> Int32 {
+        command(["run", identifier]).status
+    }
+
+    private nonisolated static func command(_ arguments: [String]) -> (status: Int32, lines: [String]) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/shortcuts")
-        process.arguments = ["list"]
+        process.arguments = arguments
         let output = Pipe()
         process.standardOutput = output
         process.standardError = Pipe()
-        do { try process.run() } catch { return [] }
+        do { try process.run() } catch { return (-1, []) }
         process.waitUntilExit()
-        guard process.terminationStatus == 0 else { return [] }
         let data = output.fileHandleForReading.readDataToEndOfFile()
         let text = String(data: data, encoding: .utf8) ?? ""
-        return text.split(separator: "\n").map { String($0) }.filter { !$0.isEmpty }
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+        return (process.terminationStatus, lines)
+    }
+}
+
+enum QuickAppProbe {
+    struct Load: Equatable, Sendable {
+        var apps: [NookQuickApp]
+        var failed: Bool
     }
 
-    nonisolated static func run(_ name: String) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/shortcuts")
-        process.arguments = ["run", name]
-        process.standardOutput = Pipe()
-        process.standardError = Pipe()
-        try? process.run()
+    /// Apps in /Applications and the home Applications folder. One folder deeper covers Utilities.
+    nonisolated static func catalog() -> Load {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Applications", isDirectory: true)
+        let roots = [
+            URL(fileURLWithPath: "/Applications", isDirectory: true),
+            home
+        ]
+        var found: [(name: String, bundleID: String)] = []
+        var readable = false
+        for root in roots {
+            let read = apps(in: root)
+            if read.readable { readable = true }
+            found.append(contentsOf: read.apps)
+        }
+        guard readable else { return Load(apps: [], failed: true) }
+        return Load(apps: NookQuickApps.catalog(apps: found), failed: false)
+    }
+
+    private nonisolated static func apps(in root: URL) -> (apps: [(name: String, bundleID: String)], readable: Bool) {
+        let manager = FileManager.default
+        guard let names = try? manager.contentsOfDirectory(atPath: root.path) else {
+            return ([], false)
+        }
+        var found: [(name: String, bundleID: String)] = []
+        for name in names where !name.hasPrefix(".") {
+            let url = root.appendingPathComponent(name)
+            if name.hasSuffix(".app") {
+                if let app = readApp(url) { found.append(app) }
+                continue
+            }
+            var isDirectory: ObjCBool = false
+            guard manager.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue else { continue }
+            guard let children = try? manager.contentsOfDirectory(atPath: url.path) else { continue }
+            for child in children where child.hasSuffix(".app") && !child.hasPrefix(".") {
+                if let app = readApp(url.appendingPathComponent(child)) { found.append(app) }
+            }
+        }
+        return (found, true)
+    }
+
+    private nonisolated static func readApp(_ url: URL) -> (name: String, bundleID: String)? {
+        let plist = url.appendingPathComponent("Contents/Info.plist")
+        guard let data = try? Data(contentsOf: plist) else { return nil }
+        var format = PropertyListSerialization.PropertyListFormat.binary
+        guard let info = try? PropertyListSerialization.propertyList(from: data, options: [], format: &format) as? [String: Any],
+              let app = NookQuickApps.entry(
+                displayName: info["CFBundleDisplayName"] as? String,
+                bundleName: info["CFBundleName"] as? String,
+                fileName: url.lastPathComponent,
+                bundleID: (info["CFBundleIdentifier"] as? String) ?? ""
+              ) else { return nil }
+        return (app.name, app.bundleID)
     }
 }
 

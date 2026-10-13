@@ -530,6 +530,12 @@ private struct NookSettingsPane: View {
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
+                        if widget.id == "shortcuts" {
+                            ShortcutPickSettings()
+                        }
+                        if widget.id == "quickApps" {
+                            QuickAppPickSettings()
+                        }
                     }
                 }
                 Spacer()
@@ -578,6 +584,55 @@ private struct NookSettingsPane: View {
 
     private func bind<T>(_ path: ReferenceWritableKeyPath<NookPreferences, T>) -> Binding<T> {
         Binding(get: { prefs[keyPath: path] }, set: { prefs[keyPath: path] = $0; prefs.persist() })
+    }
+}
+
+private struct ShortcutPickSettings: View {
+    @ObservedObject private var prefs = NookPreferences.shared
+    @ObservedObject private var board = NookBoard.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Shortcuts to show")
+                .font(.system(size: 13, weight: .semibold))
+            Text("Only the shortcuts you turn on appear in the notch. None are on until you choose them.")
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(Color.primary.opacity(0.82))
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                Button("Refresh list") { Task { await board.refreshShortcutCatalog() } }
+                Button("Select all") {
+                    prefs.setShortcutPicks(NookShortcuts.selectAll(board.shortcutCatalog))
+                }
+                Button("Clear") { prefs.setShortcutPicks([]) }
+            }
+            if board.shortcutCatalog.isEmpty {
+                Text(board.shortcutNote == NookShortcuts.loadFailed
+                     ? NookShortcuts.loadFailed
+                     : "No shortcuts on this Mac yet.")
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(Color.primary.opacity(0.82))
+            }
+            ForEach(NookShortcuts.sections(board.shortcutCatalog)) { section in
+                if let title = section.title {
+                    Text(title)
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                ForEach(section.shortcuts) { shortcut in
+                    Toggle(shortcut.name, isOn: pickBinding(shortcut.identifier))
+                }
+            }
+        }
+        .task { await board.refreshShortcutCatalog() }
+    }
+
+    private func pickBinding(_ identifier: String) -> Binding<Bool> {
+        Binding(
+            get: { prefs.shortcutPicks.contains(identifier) },
+            set: { on in
+                prefs.setShortcutPicks(NookShortcuts.setPick(identifier, on: on, picks: prefs.shortcutPicks))
+            }
+        )
     }
 }
 
@@ -651,6 +706,54 @@ private struct CalendarWidgetSettings: View {
 
     private func bind<T>(_ path: ReferenceWritableKeyPath<NookPreferences, T>) -> Binding<T> {
         Binding(get: { prefs[keyPath: path] }, set: { prefs[keyPath: path] = $0; prefs.persist() })
+    }
+}
+
+private struct QuickAppPickSettings: View {
+    @ObservedObject private var prefs = NookPreferences.shared
+    @ObservedObject private var board = NookBoard.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Apps to show")
+                .font(.system(size: 13, weight: .semibold))
+            Text("Only the apps you turn on appear in the notch. None are on until you choose them.")
+                .font(.system(size: 11, weight: .regular))
+                .foregroundStyle(Color.primary.opacity(0.82))
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                Button("Refresh list") { Task { await board.refreshQuickAppCatalog() } }
+                Button("Select all") {
+                    prefs.setQuickAppPicks(NookQuickApps.selectAll(board.quickAppCatalog))
+                }
+                Button("Clear") { prefs.setQuickAppPicks([]) }
+            }
+            if board.quickAppCatalog.isEmpty {
+                Text(board.quickAppNote == NookQuickApps.loadFailed
+                     ? NookQuickApps.loadFailed
+                     : "No apps in Applications yet.")
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(Color.primary.opacity(0.82))
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(board.quickAppCatalog) { app in
+                        Toggle(app.name, isOn: pickBinding(app.bundleID))
+                    }
+                }
+            }
+            .frame(maxHeight: 220)
+        }
+        .task { await board.refreshQuickAppCatalog() }
+    }
+
+    private func pickBinding(_ bundleID: String) -> Binding<Bool> {
+        Binding(
+            get: { prefs.quickAppPicks.contains(bundleID) },
+            set: { on in
+                prefs.setQuickAppPicks(NookQuickApps.setPick(bundleID, on: on, picks: prefs.quickAppPicks))
+            }
+        )
     }
 }
 
@@ -953,14 +1056,35 @@ private struct WidthSettingsPane: View {
 }
 
 private struct AboutSettingsPane: View {
+    @ObservedObject private var board = NookBoard.shared
+
     var body: some View {
+        let installed = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
         VStack(alignment: .leading, spacing: 8) {
             Text("Coucou")
                 .font(.system(size: 18, weight: .semibold))
-            Text("Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")")
+            Text("Version \(installed)")
                 .foregroundStyle(.secondary)
             Text("Notch companion. The notch, gesture, activity, nook, tray, and drop settings on the other tabs follow the same adjustments as NotchNook. Chat keys live under Keys.")
                 .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(LiveActivityBehavior.updateSentence(
+                installed: installed,
+                offered: board.offeredVersion,
+                checked: board.updateChecked,
+                checking: board.updateChecking
+            ))
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            Button("Check for a newer version") { board.checkForUpdate() }
+                .disabled(board.updateChecking)
+            if LiveActivityBehavior.updateIsAvailable(installed: installed, offered: board.offeredVersion) {
+                Button("Open the release page") { board.openReleasePage() }
+            }
+            Text("Looks up the published Coucou release and does not download it. Coucou checks once when it opens, and again when you press this.")
+                .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer()

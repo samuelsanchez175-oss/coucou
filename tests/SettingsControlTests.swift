@@ -145,7 +145,8 @@ enum SettingsControlTests {
         precondition(none.isEmpty)
     }
 
-    /// Width stops at the cell count the widget's controls need, and at 16. Quick Apps stays off.
+    /// Width stops at the cell count the widget's controls need, and at 16.
+    /// Quick Apps can be turned on. It stays off until the person enables it.
     /// The production change that fails this: commitCells returning the requested count unchanged.
     static func testWidgetWidthAndTheComingSoonSwitch() {
         precondition(SettingsBoard.commitCells(id: "media", cells: 5, contentPadding: 14) == 8)
@@ -156,7 +157,9 @@ enum SettingsControlTests {
         precondition(SettingsBoard.commitCells(id: "notes", cells: 20, contentPadding: 14) == 16)
         precondition(SettingsBoard.commitCells(id: "todos", cells: 4, contentPadding: 14) == 5)
         precondition(SettingsBoard.commitCells(id: "timer", cells: 4, contentPadding: 14) == 5)
-        precondition(SettingsBoard.commitWidgetEnabled(id: "quickApps", on: true) == false)
+        precondition(SettingsBoard.commitCells(id: "quickApps", cells: 4, contentPadding: 14) == 5)
+        precondition(SettingsBoard.commitWidgetEnabled(id: "quickApps", on: true) == true)
+        precondition(SettingsBoard.commitWidgetEnabled(id: "quickApps", on: false) == false)
         precondition(SettingsBoard.commitWidgetEnabled(id: "notes", on: true) == true)
         precondition(SettingsBoard.commitWidgetEnabled(id: "notes", on: false) == false)
     }

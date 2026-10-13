@@ -17,7 +17,11 @@ enum NookLayoutTests {
         testWidgetCombos()
         testHeaderLivesOnTheMenuBar()
         testTrayLineLeavesTheNotch()
-        print("Nook layout: 14 cases passed")
+        testNotes()
+        testShortcuts()
+        testQuickApps()
+        testNookRoom()
+        print("Nook layout: 18 cases passed")
     }
 
     static func testWings() {
@@ -827,5 +831,499 @@ enum NookLayoutTests {
         precondition(MirrorBehavior.keepsAsk(MirrorBehavior.afterAsk(granted: false)))
         precondition(MirrorBehavior.keepsAsk(.ask))
         precondition(MirrorBehavior.keepsAsk(.startCamera) == false)
+    }
+
+    /// One note can be rich text or colored code, and it can leave as a file.
+    static func testNotes() {
+        precondition(NookNotes.highlight("").isEmpty)
+        precondition(NookNotes.highlight("plain words").isEmpty)
+        precondition(NookNotes.highlight("a `no").isEmpty)
+        precondition(NookNotes.highlight("****").isEmpty)
+        precondition(NookNotes.highlight("**\n**").isEmpty)
+
+        let heading = "# Title"
+        precondition(NookNotes.highlight(heading).contains(noteSpan(.heading, in: heading, needle: heading)))
+
+        let loud = "say **loud**"
+        precondition(NookNotes.highlight(loud).contains(noteSpan(.emphasis, in: loud, needle: "**loud**")))
+
+        let code = "use `code` here"
+        precondition(NookNotes.highlight(code).contains(noteSpan(.code, in: code, needle: "`code`")))
+
+        let comment = "keep // aside"
+        precondition(NookNotes.highlight(comment).contains(noteSpan(.comment, in: comment, needle: "// aside")))
+
+        let shielded = "see `// not` // yes"
+        let shieldedSpans = NookNotes.highlight(shielded)
+        precondition(shieldedSpans.contains(noteSpan(.code, in: shielded, needle: "`// not`")))
+        precondition(shieldedSpans.contains(noteSpan(.comment, in: shielded, needle: "// yes")))
+        precondition(shieldedSpans.filter { $0.kind == .comment }.count == 1)
+
+        let mixed = "say `**no**` **yes**"
+        let mixedSpans = NookNotes.highlight(mixed)
+        precondition(mixedSpans.contains(noteSpan(.code, in: mixed, needle: "`**no**`")))
+        precondition(mixedSpans.contains(noteSpan(.emphasis, in: mixed, needle: "**yes**")))
+        precondition(mixedSpans.filter { $0.kind == .emphasis }.count == 1)
+
+        let marked = "🙂 **yes**"
+        precondition(NookNotes.highlight(marked).contains(noteSpan(.emphasis, in: marked, needle: "**yes**")))
+
+        let both = "# Title **loud**"
+        let bothSpans = NookNotes.highlight(both)
+        precondition(bothSpans.contains(noteSpan(.heading, in: both, needle: both)))
+        precondition(bothSpans.contains(noteSpan(.emphasis, in: both, needle: "**loud**")))
+
+        let lines = "# One\nTwo"
+        let lineSpans = NookNotes.highlight(lines)
+        precondition(lineSpans.contains(noteSpan(.heading, in: lines, needle: "# One")))
+        precondition(!lineSpans.contains { $0.kind == .heading && $0.start > 0 })
+
+        precondition(NookNotes.exportFilename(.plain) == "Note.txt")
+        precondition(NookNotes.exportFilename(.richText) == "Note.rtf")
+        precondition(NookNotes.exportFilename(.markdown) == "Note.md")
+        precondition(NookNotes.exportText(mode: .rich, plain: "hello", format: .plain) == "hello")
+        precondition(NookNotes.exportText(mode: .code, plain: "# hi", format: .markdown) == "# hi")
+        precondition(NookNotes.exportText(mode: .rich, plain: "hello", format: .richText) == nil)
+        precondition(NookNotes.exportText(mode: .code, plain: "hello", format: .richText) == nil)
+
+        precondition(NookLayout.singleLineWidth("notes") == 120)
+        precondition(NookLayout.fittedCells(id: "notes", cells: 5, contentPadding: 14) == 5)
+
+        let column = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookIslandView.swift",
+            from: "struct NookNotesColumn",
+            until: "struct NookTodosColumn"
+        )
+        precondition(column.contains("Rich text"), "the mode menu names rich text")
+        precondition(column.contains("Button(\"Code\")"), "the mode menu names code")
+        precondition(column.contains("Format"))
+        precondition(column.contains("Bold"))
+        precondition(column.contains("Italic"))
+        precondition(column.contains("Underline"))
+        precondition(column.contains("Export"))
+        precondition(column.contains("Plain text"))
+        precondition(column.contains("Markdown"))
+        precondition(column.contains("NSTextView"))
+        precondition(column.contains("Rich text is the default."))
+        precondition(column.contains("size: 11"), "the note hint is a readable sentence")
+
+        let saved = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookBoard.swift",
+            from: "func exportNote(",
+            until: "func loadShortcutsIfNeeded"
+        )
+        precondition(saved.contains("nook.noteText"))
+        precondition(saved.contains("nook.noteRTF"))
+        precondition(saved.contains("nook.noteMode"))
+        precondition(saved.contains("Coucou/notes"))
+        precondition(saved.contains("activateFileViewerSelecting"))
+        precondition(!saved.contains("NSSavePanel"))
+        precondition(!saved.contains("NSOpenPanel"))
+
+        let loaded = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookBoard.swift",
+            from: "private func loadPersisted()",
+            until: "private func saveTray()"
+        )
+        precondition(loaded.contains("nook.noteRTF"))
+        precondition(loaded.contains("nook.noteMode"))
+    }
+
+    /// Chosen shortcuts sit two per row. Nothing is shown until it is turned on.
+    static func testShortcuts() {
+        let identified = "Paste and play (9F9112E5-9C76-4B14-8E0C-296F225C1C42)"
+        let parsed = NookShortcuts.parseLine(identified)
+        precondition(parsed?.name == "Paste and play")
+        precondition(parsed?.identifier == "9F9112E5-9C76-4B14-8E0C-296F225C1C42")
+        precondition(NookShortcuts.parseLine("  ") == nil)
+        precondition(NookShortcuts.parseLine("Lights")?.identifier == "Lights")
+
+        let home = "11111111-1111-1111-1111-111111111111"
+        let loose = "22222222-2222-2222-2222-222222222222"
+        let other = "33333333-3333-3333-3333-333333333333"
+        let catalog = NookShortcuts.catalog(groups: [
+            ("", [
+                "Paste and play (\(loose))",
+                "Again (\(loose))",
+                ""
+            ]),
+            ("Home", ["Lights (\(home))"]),
+            ("Work", ["Mail (\(other))"])
+        ])
+        precondition(catalog.map(\.identifier) == [loose, home, other])
+        precondition(catalog.map(\.folder) == ["", "Home", "Work"])
+        precondition(catalog[0].name == "Paste and play")
+
+        precondition(NookShortcuts.shown(catalog: catalog, picks: []).isEmpty)
+        let shown = NookShortcuts.shown(catalog: catalog, picks: ["missing", other, loose])
+        precondition(shown.map(\.identifier) == [loose, other])
+        precondition(NookShortcuts.setPick(home, on: true, picks: [loose]) == [loose, home])
+        precondition(NookShortcuts.setPick(loose, on: false, picks: [loose, home]) == [home])
+        precondition(NookShortcuts.setPick(home, on: true, picks: [home]) == [home])
+        precondition(NookShortcuts.selectAll(catalog) == [loose, home, other])
+        precondition(NookShortcuts.keptPicks([loose, "gone", home], catalog: catalog) == [loose, home])
+
+        let paired = NookShortcuts.rows(catalog)
+        precondition(paired.map { $0.map(\.identifier) } == [[loose, home], [other]])
+        precondition(NookShortcuts.rows([]).isEmpty)
+
+        let filed = NookShortcuts.sections(catalog)
+        precondition(filed.map(\.title) == ["No folder", "Home", "Work"])
+        let onlyLoose = NookShortcuts.sections([catalog[0]])
+        precondition(onlyLoose.count == 1)
+        precondition(onlyLoose[0].title == nil)
+
+        precondition(NookShortcuts.runningNote("Lights") == "Running Lights.")
+        precondition(NookShortcuts.finishedNote(name: "Lights", exitCode: 0) == "")
+        precondition(NookShortcuts.finishedNote(name: "Lights", exitCode: 1) == "Lights did not run.")
+        precondition(NookLayout.singleLineWidth("shortcuts") == 130)
+
+        let column = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookIslandView.swift",
+            from: "struct NookShortcutsColumn",
+            until: "struct AirDropTileFrameKey"
+        )
+        precondition(column.contains("Choose your shortcuts in settings."))
+        precondition(column.contains("None are on until you choose them in settings."))
+        precondition(column.contains("size: 11"))
+        precondition(column.contains("LazyVGrid"))
+        precondition(column.contains("GridItem"))
+        precondition(!column.contains("prefix(12)"))
+
+        let settings = sourceSlice(
+            file: "NotchBuddy/Sources/App/CoucouSettingsShell.swift",
+            from: "struct ShortcutPickSettings",
+            until: "struct CalendarWidgetSettings"
+        )
+        precondition(settings.contains("Only the shortcuts you turn on appear in the notch."))
+        precondition(settings.contains("None are on until you choose them."))
+        precondition(settings.contains("Refresh list"))
+        precondition(settings.contains("Select all"))
+        precondition(settings.contains("Clear"))
+        precondition(settings.contains("size: 11"))
+
+        let saved = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookPreferences.swift",
+            from: "func persist()",
+            until: "private func loadBool"
+        )
+        precondition(saved.contains("shortcutPicks"))
+        let defaults = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookPreferences.swift",
+            from: "static let defaultWidgets",
+            until: "static let defaultActivities"
+        )
+        precondition(defaults.contains("id: \"shortcuts\", enabled: false"))
+    }
+
+    /// Chosen apps sit two per row. Nothing is shown until it is turned on.
+    static func testQuickApps() {
+        let safari = NookQuickApps.entry(
+            displayName: "Safari", bundleName: "Safari", fileName: "Safari.app", bundleID: "com.apple.Safari"
+        )
+        precondition(safari?.name == "Safari")
+        precondition(safari?.bundleID == "com.apple.Safari")
+        let chrome = NookQuickApps.entry(
+            displayName: "Google Chrome", bundleName: "Chrome", fileName: "Google Chrome.app", bundleID: "com.google.Chrome"
+        )
+        precondition(chrome?.name == "Google Chrome")
+        let notes = NookQuickApps.entry(
+            displayName: nil, bundleName: "Notes", fileName: "Notes.app", bundleID: "com.apple.Notes"
+        )
+        precondition(notes?.name == "Notes")
+        let preview = NookQuickApps.entry(
+            displayName: "  ", bundleName: "", fileName: "Preview.app", bundleID: "com.apple.Preview"
+        )
+        precondition(preview?.name == "Preview")
+        precondition(NookQuickApps.entry(
+            displayName: "Finder", bundleName: nil, fileName: "Finder.app", bundleID: "  "
+        ) == nil)
+        precondition(NookQuickApps.entry(
+            displayName: nil, bundleName: nil, fileName: "", bundleID: "com.example.Bare"
+        ) == nil)
+
+        let catalog = NookQuickApps.catalog(apps: [
+            (name: "Safari", bundleID: "com.apple.Safari"),
+            (name: "Notes", bundleID: "com.apple.Notes"),
+            (name: "Notes", bundleID: "com.apple.Notes"),
+            (name: "", bundleID: "com.empty"),
+            (name: "Mail", bundleID: " ")
+        ])
+        precondition(catalog.map(\.bundleID) == ["com.apple.Notes", "com.apple.Safari"])
+        precondition(NookQuickApps.shown(catalog: catalog, picks: []).isEmpty)
+        let shown = NookQuickApps.shown(
+            catalog: catalog, picks: ["missing", "com.apple.Safari", "com.apple.Notes"]
+        )
+        precondition(shown.map(\.bundleID) == ["com.apple.Notes", "com.apple.Safari"])
+        let ordered = NookQuickApps.ordered(
+            catalog: catalog, picks: ["com.apple.Safari", "com.apple.Notes"], lastBundleID: "com.apple.Safari"
+        )
+        precondition(ordered.map(\.bundleID) == ["com.apple.Safari", "com.apple.Notes"], "the last opened app leads")
+        let unchanged = NookQuickApps.ordered(
+            catalog: catalog, picks: ["com.apple.Safari", "com.apple.Notes"], lastBundleID: "gone"
+        )
+        precondition(unchanged.map(\.bundleID) == ["com.apple.Notes", "com.apple.Safari"])
+        precondition(NookQuickApps.setPick("com.apple.Safari", on: true, picks: ["com.apple.Notes"]) == ["com.apple.Notes", "com.apple.Safari"])
+        precondition(NookQuickApps.setPick("com.apple.Notes", on: false, picks: ["com.apple.Notes", "com.apple.Safari"]) == ["com.apple.Safari"])
+        precondition(NookQuickApps.setPick("com.apple.Notes", on: true, picks: ["com.apple.Notes"]) == ["com.apple.Notes"])
+        precondition(NookQuickApps.selectAll(catalog) == ["com.apple.Notes", "com.apple.Safari"])
+        precondition(NookQuickApps.keptPicks(
+            ["com.apple.Notes", "gone", "com.apple.Safari"], catalog: catalog
+        ) == ["com.apple.Notes", "com.apple.Safari"])
+        precondition(NookQuickApps.rows(catalog).map { $0.map(\.bundleID) } == [["com.apple.Notes", "com.apple.Safari"]])
+        precondition(NookQuickApps.rows([]).isEmpty)
+        let three = catalog + [NookQuickApp(name: "Mail", bundleID: "com.apple.mail")]
+        precondition(NookQuickApps.rows(three).map { $0.map(\.bundleID) } == [
+            ["com.apple.Notes", "com.apple.Safari"],
+            ["com.apple.mail"]
+        ])
+        precondition(NookLayout.singleLineWidth("quickApps") == 120)
+        precondition(NookLayout.fittedCells(id: "quickApps", cells: 4, contentPadding: 14) == 5)
+
+        let slot = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookIslandView.swift",
+            from: "case \"quickApps\":",
+            until: "default:"
+        )
+        precondition(slot.contains("NookQuickAppsColumn"))
+        precondition(!slot.contains("Coming soon"))
+
+        let column = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookIslandView.swift",
+            from: "struct NookQuickAppsColumn",
+            until: "struct NookTrayPage"
+        )
+        precondition(column.contains("Choose your apps in settings."))
+        precondition(column.contains("None are on until you choose them in settings."))
+        precondition(column.contains("size: 11"))
+        precondition(column.contains("LazyVGrid"))
+        precondition(column.contains("GridItem"))
+        precondition(column.contains("urlForApplication"))
+        precondition(!column.contains("prefix(12)"))
+        precondition(!column.contains("NSOpenPanel"))
+        precondition(!column.contains("NSSavePanel"))
+
+        let editor = sourceSlice(
+            file: "NotchBuddy/Sources/App/CoucouSettingsShell.swift",
+            from: "private var widgetEditor",
+            until: "private var enabledPreview"
+        )
+        precondition(editor.contains("widget.id == \"quickApps\""))
+        precondition(editor.contains("QuickAppPickSettings()"))
+
+        let settings = sourceSlice(
+            file: "NotchBuddy/Sources/App/CoucouSettingsShell.swift",
+            from: "struct QuickAppPickSettings",
+            until: "class CalendarListModel"
+        )
+        precondition(settings.contains("Only the apps you turn on appear in the notch."))
+        precondition(settings.contains("None are on until you choose them."))
+        precondition(settings.contains("Refresh list"))
+        precondition(settings.contains("Select all"))
+        precondition(settings.contains("Clear"))
+        precondition(settings.contains("size: 11"))
+        precondition(!settings.contains("NSOpenPanel"))
+        precondition(!settings.contains("NSSavePanel"))
+
+        let saved = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookPreferences.swift",
+            from: "func persist()",
+            until: "private func loadBool"
+        )
+        precondition(saved.contains("quickAppPicks"))
+        let cleared = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookPreferences.swift",
+            from: "func applyDefaults()",
+            until: "func load()"
+        )
+        precondition(cleared.contains("quickAppPicks = []"))
+        let loaded = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookPreferences.swift",
+            from: "func load()",
+            until: "func fitEnabledWidgetWidths"
+        )
+        precondition(loaded.contains("quickAppPicks"))
+        let defaults = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookPreferences.swift",
+            from: "static let defaultWidgets",
+            until: "static let defaultActivities"
+        )
+        precondition(defaults.contains("id: \"quickApps\", enabled: false"))
+        let soon = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookPreferences.swift",
+            from: "func comingSoon",
+            until: "enum LiveActivityInfo"
+        )
+        precondition(soon.contains("false"))
+        precondition(!soon.contains("quickApps"))
+
+        let tick = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookBoard.swift",
+            from: "private func tick()",
+            until: "private func refreshMedia"
+        )
+        precondition(tick.contains("loadQuickAppsIfNeeded"))
+        precondition(!tick.contains("QuickAppProbe"))
+
+        let once = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookBoard.swift",
+            from: "func loadQuickAppsIfNeeded",
+            until: "func refreshQuickAppCatalog"
+        )
+        precondition(once.contains("quickAppsLoaded"))
+
+        let refresh = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookBoard.swift",
+            from: "func refreshQuickAppCatalog",
+            until: "func openQuickApp"
+        )
+        precondition(refresh.contains("load.failed"))
+        precondition(refresh.contains("keptPicks"))
+        let failedAt = (refresh as NSString).range(of: "load.failed").location
+        let keptAt = (refresh as NSString).range(of: "keptPicks").location
+        precondition(failedAt != NSNotFound && keptAt != NSNotFound && failedAt < keptAt)
+
+        let probe = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookBoard.swift",
+            from: "enum QuickAppProbe",
+            until: "enum BatteryProbe"
+        )
+        precondition(probe.contains("/Applications"))
+        precondition(probe.contains("Info.plist"))
+        precondition(probe.contains("CFBundleIdentifier"))
+        precondition(!probe.contains("NSOpenPanel"))
+        precondition(!probe.contains("NSSavePanel"))
+    }
+
+    static func testNookRoom() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let soon = NookEventFact(
+            calendarID: "work", title: "Standup",
+            start: now.addingTimeInterval(600), end: now.addingTimeInterval(1200), isAllDay: false
+        )
+        let later = NookEventFact(
+            calendarID: "work", title: "Tomorrow",
+            start: now.addingTimeInterval(86_400), end: now.addingTimeInterval(90_000), isAllDay: false
+        )
+        let past = NookEventFact(
+            calendarID: "work", title: "Done",
+            start: now.addingTimeInterval(-3600), end: now.addingTimeInterval(-60), isAllDay: false
+        )
+        let allDay = NookEventFact(
+            calendarID: "home", title: "Holiday",
+            start: now, end: now.addingTimeInterval(86_400), isAllDay: true
+        )
+        precondition(NookLayout.leadEvent([soon, later], now: now, upcomingOnly: true)?.title == "Standup")
+        precondition(NookLayout.leadEvent([], now: now, upcomingOnly: true) == nil, "an empty today stays empty")
+        precondition(NookLayout.leadEvent([past], now: now, upcomingOnly: true) == nil, "a finished event is not the next line")
+        precondition(NookLayout.leadEvent([later], now: now, upcomingOnly: false)?.title == "Tomorrow")
+        precondition(NookLayout.soonEvent(now: now, events: [soon])?.title == "Standup")
+        precondition(NookLayout.soonEvent(now: now, events: [later]) == nil)
+        precondition(NookLayout.soonEvent(now: now, events: [past]) == nil)
+        precondition(NookLayout.soonEvent(now: now, events: [allDay]) == nil)
+        precondition(NookLayout.lampMarked(timerEnded: false, soon: soon))
+        precondition(NookLayout.lampMarked(timerEnded: true, soon: nil))
+        precondition(!NookLayout.lampMarked(timerEnded: false, soon: nil))
+        precondition(NookLayout.lampHint(timerEnded: true, eventTitle: nil) == "The timer ended. Opens the Nook.")
+        precondition(NookLayout.calendarShowURL(start: Date(timeIntervalSinceReferenceDate: 1234.5))?.absoluteString == "calshow:1234.5")
+        precondition(NookLayout.todosHeading(left: 2) == "2 left")
+        precondition(NookLayout.todosHeading(left: 1) == "1 left")
+        precondition(NookLayout.todosHeading(left: 0) == "Nothing left")
+
+        let remote = NookLayout.NookLastTrack(
+            title: "Blue", artist: "Ada", source: "system", usesRemote: true, bundleID: "com.google.Chrome"
+        )
+        precondition(NookLayout.resume(remote) == .remote)
+        let music = NookLayout.NookLastTrack(
+            title: "Blue", artist: "Ada", source: "music", usesRemote: false, bundleID: "com.apple.Music"
+        )
+        precondition(NookLayout.resume(music) == .player(source: "music", bundleID: "com.apple.Music"))
+        precondition(NookLayout.rememberedTrack(
+            title: "  ", artist: "Ada", source: "music", usesRemote: false, bundleID: "com.apple.Music"
+        ) == nil)
+        precondition(NookLayout.mediaIsLive(title: "Blue"))
+        precondition(!NookLayout.mediaIsLive(title: nil))
+        precondition(!NookLayout.mediaIsLive(title: " "))
+
+        let pad: CGFloat = 14
+        let quietMedia = NookLayout.columnWidth(id: "media", cells: 5, contentPadding: pad, mediaLive: false)
+        let liveMedia = NookLayout.columnWidth(id: "media", cells: 5, contentPadding: pad, mediaLive: true)
+        precondition(liveMedia > quietMedia, "a playing song widens the media column")
+        let quietCalendar = NookLayout.columnWidth(id: "calendar", cells: 5, contentPadding: pad, mediaLive: false)
+        let liveCalendar = NookLayout.columnWidth(id: "calendar", cells: 5, contentPadding: pad, mediaLive: true)
+        precondition(quietCalendar > liveCalendar, "a quiet player gives the calendar the room")
+        precondition(quietCalendar == NookLayout.columnWidth(id: "calendar", cells: 5, contentPadding: pad))
+        let wideStored = NookLayout.columnWidth(id: "calendar", cells: 16, contentPadding: pad, mediaLive: false)
+        precondition(wideStored == NookLayout.columnWidth(id: "calendar", cells: 16, contentPadding: pad))
+        let compactStored = NookLayout.columnWidth(id: "calendar", cells: 16, contentPadding: pad, mediaLive: true)
+        precondition(compactStored < wideStored, "a playing song keeps the calendar on the next event")
+        precondition(
+            NookLayout.columnWidth(id: "mirror", cells: 2, contentPadding: pad, mediaLive: true)
+                == NookLayout.columnWidth(id: "mirror", cells: 2, contentPadding: pad)
+        )
+        precondition(NookLayout.closedLampCenterX(whiteCenter: 32, housingLeading: 0) == 12)
+        precondition(NookLayout.closedLampCenterX(whiteCenter: 48, housingLeading: 80) == 68)
+
+        let calendar = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookIslandView.swift",
+            from: "struct NookCalendarColumn",
+            until: "struct NookMirrorColumn"
+        )
+        precondition(calendar.contains("Nothing for today"), "an empty today keeps its caption")
+        precondition(!calendar.contains("Tomorrow"), "an empty today does not name another day")
+        precondition(calendar.contains("openCalendarEvent"))
+        let media = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookIslandView.swift",
+            from: "struct NookMediaColumn",
+            until: "struct NookPlatformGlyph"
+        )
+        precondition(media.contains("lastTrack"))
+        precondition(media.contains("Plays the last song"))
+        let todos = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookIslandView.swift",
+            from: "struct NookTodosColumn",
+            until: "struct NookTimerColumn"
+        )
+        precondition(todos.contains("todosHeading"))
+        precondition(todos.contains("finishTodo"))
+        let apps = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookIslandView.swift",
+            from: "struct NookQuickAppsColumn",
+            until: "struct NookTrayPage"
+        )
+        precondition(apps.contains("ordered"))
+        precondition(apps.contains("44"))
+        let header = sourceSlice(
+            file: "NotchBuddy/Sources/App/IslandRootView.swift",
+            from: "struct IslandHeader",
+            until: "struct TabButton"
+        )
+        precondition(header.contains("lampMarked"))
+        let closed = sourceSlice(
+            file: "NotchBuddy/Sources/App/IslandRootView.swift",
+            from: "if board.lampMarked",
+            until: "if state.mode == .expanded"
+        )
+        precondition(closed.contains("ClosedNookLamp"))
+        let lamp = sourceSlice(
+            file: "NotchBuddy/Sources/App/IslandRootView.swift",
+            from: "struct ClosedNookLamp",
+            until: "struct IslandHeader"
+        )
+        precondition(lamp.contains("openNookPage"))
+        precondition(lamp.contains("lamp.desk.fill"))
+        let drawer = sourceSlice(
+            file: "NotchBuddy/Sources/App/IslandWindowController.swift",
+            from: "let pull = max(0, AppState.shared.drawerExtension)",
+            until: "Closed-notch items stay in the menu bar"
+        )
+        precondition(drawer.contains("mediaLive"))
+        precondition(drawer.contains("nookDrawerWidth"))
+    }
+
+    static func noteSpan(_ kind: NookNoteSpan.Kind, in source: String, needle: String) -> NookNoteSpan {
+        let range = (source as NSString).range(of: needle)
+        precondition(range.location != NSNotFound, needle)
+        return NookNoteSpan(kind: kind, start: range.location, end: range.location + range.length)
     }
 }

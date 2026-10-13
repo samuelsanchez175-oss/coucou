@@ -16,6 +16,13 @@ enum TerminalBehaviorTests {
         testOneOpenBlobStaysInItsQuadrant()
         testOpenWindowsShareTheScreen()
         testCollapsedBlobsStayBesideTheCamera()
+        testClosedPurpleClickKeepsThatTerminal()
+        testHoverOntoPurpleFocusesThatTerminal()
+        testYellowCornerStaysOnYellow()
+        testEmptyBlobClickOpensThatColor()
+        testNewWindowKeepsTheBlobColor()
+        testFontFillsTheCornerAfterTheColor()
+        testOneClickOpensOneWindow()
         testCuddlerFollowsTheTerminal()
         testBlobUsesTheTerminalsOwnName()
         testBlobTitleFitsInThreeWords()
@@ -30,12 +37,13 @@ enum TerminalBehaviorTests {
         testLostMarriageReturnsToTheWindowInThatCorner()
         testMarriageFollowsTheSameTerminalWhenItsWindowChanges()
         testStatusHeartbeats()
+        testEmptyBlobHidesTheCornerLight()
         testPageLockHoldsThenOpens()
         testDropHitsTheBlob()
         testNookKeepsTheSharedHeader()
         testHeaderSitsOnTheMenuBar()
         testBlobOpensAWindowAtTwentyPoint()
-        print("Terminal behavior: 29 cases passed")
+        print("Terminal behavior: 37 cases passed")
     }
 
     /// A download that prints "45%" must stay Working. Treating every
@@ -678,7 +686,7 @@ enum TerminalBehaviorTests {
 
         let desk = try! String(contentsOfFile: "NotchBuddy/Sources/App/TerminalDesk.swift", encoding: .utf8)
         let tick = sourceSlice(desk, from: "private func tick()", until: "private func apply(")
-        precondition(tick.contains("windowInCorner"), "a tick marries the window already in that corner")
+        precondition(tick.contains("marriagesForCorners"), "a tick marries the window already in that corner")
         let open = sourceSlice(desk, from: "func openOrFocus(", until: "func togglePageLock(")
         precondition(open.contains("windowInCorner"), "pressing the blob focuses the window already in that corner")
         let snapshot = sourceSlice(desk, from: "static func snapshot", until: "nonisolated static func openOrFocus")
@@ -743,7 +751,254 @@ enum TerminalBehaviorTests {
         precondition(resolver.contains("marriedWindow"), "the press follows the saved session")
     }
 
-    /// The closed notch keeps the white blob in the left ear and the four blobs in the right ear.
+    /// A click on the closed purple blob is the bottom-left color, and it still
+    /// focuses that terminal after the notch opens.
+    static func testClosedPurpleClickKeepsThatTerminal() {
+        let centerX: CGFloat = 518
+        let centerY: CGFloat = 22.5
+        let scale: CGFloat = 1
+        let side = TerminalBehavior.compactSide * scale
+        func slot(_ dx: CGFloat, _ dy: CGFloat) -> String? {
+            TerminalBehavior.collapsedBlobSlot(
+                x: centerX + dx,
+                y: centerY + dy,
+                centerX: centerX,
+                centerY: centerY,
+                scale: scale
+            )
+        }
+        precondition(slot(-side / 4, -side / 4) == "green")
+        precondition(slot(side / 4, -side / 4) == "orange")
+        precondition(slot(-side / 4, side / 4) == "purple", "purple is the bottom left")
+        precondition(slot(side / 4, side / 4) == "red")
+        precondition(slot(-side / 2 - 10, 0) == nil, "a click past the ear is not a blob")
+        precondition(slot(-side / 4, side / 2 + 4) == "purple", "the figure that hangs below the frame is still purple")
+        precondition(TerminalBehavior.collapsedBlobSlot(
+            x: centerX, y: centerY, centerX: centerX, centerY: centerY, scale: 0
+        ) == nil)
+
+        let controller = try! String(contentsOfFile: "NotchBuddy/Sources/App/IslandWindowController.swift", encoding: .utf8)
+        let press = sourceSlice(controller, from: "matching: .leftMouseDown", until: "matching: .leftMouseDragged")
+        precondition(press.contains("closedTerminalBlob"), "the press remembers which closed blob was hit")
+        let mouseUp = sourceSlice(controller, from: "matching: .leftMouseUp", until: "addGlobalMonitorForEvents")
+        precondition(mouseUp.contains("finishBlobPress"), "mouse up still finishes the pressed blob")
+        precondition(mouseUp.contains("fsm.click()") || mouseUp.contains("expand("), "the notch still opens")
+        let finishAt = mouseUp.range(of: "finishBlobPress")
+        let clickAt = mouseUp.range(of: "fsm.click()") ?? mouseUp.range(of: "expand(")
+        precondition(finishAt != nil && clickAt != nil && finishAt!.lowerBound < clickAt!.lowerBound, "the terminal is focused before the notch opens and resets the color")
+        let finish = sourceSlice(controller, from: "private func finishBlobPress", until: "private func startKeyMonitor")
+        precondition(finish.contains("armSelection"), "the color is armed before the notch opens")
+        precondition(finish.contains(".focus:"), "a click focuses that terminal")
+    }
+
+    /// Hover opens the notch as soon as the pointer arrives. The blob under that
+    /// pointer stays selected, and the click still focuses it. One missed listing
+    /// does not hand that terminal to another color.
+    static func testHoverOntoPurpleFocusesThatTerminal() {
+        precondition(TerminalBehavior.releaseMarriage(terminated: true, misses: 1) == false, "one missed listing keeps the marriage")
+        precondition(TerminalBehavior.releaseMarriage(terminated: true, misses: 2), "a window that stays gone is released")
+        precondition(TerminalBehavior.releaseMarriage(terminated: false, misses: 3) == false)
+
+        let controller = try! String(contentsOfFile: "NotchBuddy/Sources/App/IslandWindowController.swift", encoding: .utf8)
+        let hover = sourceSlice(controller, from: "alwaysOpenOnHover", until: "fsm.mouseLeft()")
+        let beforeOpen = sourceSlice(hover, from: "alwaysOpenOnHover", until: "fsm.click()")
+        precondition(beforeOpen.contains("armSelection"), "hover arms the blob under the pointer before the notch opens")
+        precondition(beforeOpen.contains("closedAimID"), "hover uses the blob the pointer is on")
+        let press = sourceSlice(controller, from: "matching: .leftMouseDown", until: "matching: .leftMouseDragged")
+        precondition(press.contains("closedAimID"), "the click still focuses that blob after hover opens the notch")
+
+        let desk = try! String(contentsOfFile: "NotchBuddy/Sources/App/TerminalDesk.swift", encoding: .utf8)
+        let tick = sourceSlice(desk, from: "private func tick()", until: "private func apply(")
+        precondition(tick.contains("releaseMarriage"), "a tick waits before giving the terminal to another color")
+    }
+
+    /// A window sitting in the yellow corner lights the yellow blob.
+    /// Purple does not keep it, and purple does not claim it later.
+    /// Holding an empty color still opens that color in its own corner.
+    static func testYellowCornerStaysOnYellow() {
+        let span = (left: 0, top: 45, width: 2048, height: 1285)
+        func quad(_ id: String) -> TerminalBehavior.TerminalBounds {
+            TerminalBehavior.quadrantBounds(
+                slotID: id,
+                visibleLeft: span.left,
+                visibleTop: span.top,
+                visibleWidth: span.width,
+                visibleHeight: span.height
+            )
+        }
+        let quadrants = [
+            "green": quad("green"),
+            "orange": quad("orange"),
+            "purple": quad("purple"),
+            "red": quad("red"),
+        ]
+        let yellowFrame = TerminalBehavior.TerminalBounds(left: 1020, top: 45, right: 2048, bottom: 692)
+        let greenFrame = TerminalBehavior.TerminalBounds(left: 0, top: 45, right: 1023, bottom: 700)
+        let loose = TerminalBehavior.TerminalBounds(left: 200, top: 200, right: 700, bottom: 600)
+        precondition(TerminalBehavior.cornerOwner(bounds: yellowFrame, quadrants: quadrants) == "orange", "the top-right frame is yellow")
+        precondition(TerminalBehavior.cornerOwner(bounds: greenFrame, quadrants: quadrants) == "green")
+        precondition(TerminalBehavior.cornerOwner(bounds: loose, quadrants: quadrants) == nil, "a window between corners is not guessed")
+
+        let saved = [
+            TerminalBehavior.CornerClaim(id: "green", windowID: 4618, tty: "/dev/ttys003", lockedName: "grok"),
+            TerminalBehavior.CornerClaim(id: "orange", windowID: nil, tty: "", lockedName: ""),
+            TerminalBehavior.CornerClaim(id: "purple", windowID: 4024, tty: "/dev/ttys007", lockedName: "Coucou"),
+            TerminalBehavior.CornerClaim(id: "red", windowID: nil, tty: "", lockedName: ""),
+        ]
+        let windows = [
+            TerminalBehavior.ListedWindow(id: 4618, title: "grok", bounds: greenFrame, tty: "/dev/ttys003"),
+            TerminalBehavior.ListedWindow(id: 4024, title: "Coucou", bounds: yellowFrame, tty: "/dev/ttys007"),
+        ]
+        let seated = TerminalBehavior.marriagesForCorners(slots: saved, windows: windows, quadrants: quadrants)
+        precondition(seated[0].windowID == 4618 && seated[0].lockedName == "grok", "green keeps its own corner")
+        precondition(seated[1].windowID == 4024 && seated[1].tty == "/dev/ttys007" && seated[1].lockedName == "Coucou", "yellow takes the window in its corner")
+        precondition(seated[2].windowID == nil && seated[2].tty.isEmpty && seated[2].lockedName.isEmpty, "purple lets go of the yellow window")
+        precondition(seated[3].windowID == nil)
+
+        let unframed = TerminalBehavior.marriagesForCorners(
+            slots: saved,
+            windows: [TerminalBehavior.ListedWindow(id: 4024, title: "Coucou", tty: "/dev/ttys007")],
+            quadrants: quadrants
+        )
+        precondition(unframed[2].windowID == 4024, "a listing with no frame keeps the saved marriage")
+
+        let parked = TerminalBehavior.marriagesForCorners(
+            slots: [
+                TerminalBehavior.CornerClaim(id: "purple", windowID: 50, tty: "/dev/ttys009", lockedName: "Notes"),
+            ],
+            windows: [TerminalBehavior.ListedWindow(id: 50, title: "Notes", bounds: loose, tty: "/dev/ttys009")],
+            quadrants: quadrants
+        )
+        precondition(parked[0].windowID == 50 && parked[0].lockedName == "Notes", "a window outside every corner stays where it was opened")
+
+        let claimed = TerminalBehavior.claimFreeWindows(
+            slots: [
+                TerminalBehavior.ClaimSlot(id: "green", windowID: 4618, tty: "/dev/ttys003"),
+                TerminalBehavior.ClaimSlot(id: "orange", windowID: 1, tty: "/dev/ttys001"),
+                TerminalBehavior.ClaimSlot(id: "purple", windowID: nil, tty: ""),
+                TerminalBehavior.ClaimSlot(id: "red", windowID: nil, tty: ""),
+            ],
+            open: [TerminalBehavior.ListedWindow(id: 4024, title: "samuel — -zsh — 80×24", bounds: yellowFrame, tty: "/dev/ttys007")],
+            freeIDs: ["purple", "red"],
+            acceptPlain: true,
+            quadrants: quadrants
+        )
+        precondition(claimed[2].windowID == nil && claimed[3].windowID == nil, "purple does not claim the window in the yellow corner")
+
+        let desk = try! String(contentsOfFile: "NotchBuddy/Sources/App/TerminalDesk.swift", encoding: .utf8)
+        let tick = sourceSlice(desk, from: "private func tick()", until: "private func apply(")
+        precondition(tick.contains("marriagesForCorners"), "a tick gives a corner back to its color")
+        let open = sourceSlice(desk, from: "func openOrFocus(", until: "func togglePageLock(")
+        precondition(open.contains("shellProfile"), "opening a color uses that color's terminal profile")
+        precondition(open.contains("quadrantPlacements") || open.contains("cornerFrames"), "opening a color uses that color's corner")
+
+        let controller = try! String(contentsOfFile: "NotchBuddy/Sources/App/IslandWindowController.swift", encoding: .utf8)
+        let globalUp = sourceSlice(controller, from: "matching: .leftMouseUp) { [weak self] _ in", until: "matching: .keyDown")
+        precondition(globalUp.contains("finishBlobPress"), "a hold still opens the color after the pointer leaves the notch")
+        let finish = sourceSlice(controller, from: "private func finishBlobPress", until: "private func startKeyMonitor")
+        precondition(finish.contains("openOrFocus"), "holding the blob opens that color in its corner")
+        precondition(finish.contains(".focus:"), "a short press still only brings the window forward")
+    }
+
+    /// A click on green, yellow, purple, or red opens that color when it has no
+    /// terminal. A color that already has one is only brought forward. The click
+    /// counts even when the pointer just arrived.
+    static func testEmptyBlobClickOpensThatColor() {
+        let desk = try! String(contentsOfFile: "NotchBuddy/Sources/App/TerminalDesk.swift", encoding: .utf8)
+        let focus = sourceSlice(desk, from: "func focus(", until: "func openOrFocus(")
+        let resolved = focus.range(of: "resolvedWindowID")
+        let opens = focus.range(of: "openOrFocus")
+        let raises = focus.range(of: "TerminalBridge.focus")
+        precondition(
+            resolved != nil && opens != nil && raises != nil
+                && resolved!.lowerBound < opens!.lowerBound
+                && opens!.lowerBound < raises!.lowerBound,
+            "an empty blob opens that color; a married window is only raised"
+        )
+
+        let controller = try! String(contentsOfFile: "NotchBuddy/Sources/App/IslandWindowController.swift", encoding: .utf8)
+        let press = sourceSlice(controller, from: "matching: .leftMouseDown", until: "matching: .leftMouseDragged")
+        let hit = press.range(of: "closedTerminalBlob")
+        let gate = press.range(of: "wasInIsland")
+        precondition(
+            hit != nil && gate != nil && hit!.lowerBound < gate!.lowerBound,
+            "a blob click counts before the pointer has rested in the notch"
+        )
+        precondition(press.contains("terminalBlob"), "an open face uses the same click for every color")
+        precondition(press.contains("|| slot != nil"), "a hit blob is pressed even when the notch has not seen the pointer yet")
+    }
+
+    /// Green, yellow, purple, and red each open in that color. Pulling the new
+    /// tab into its own window happens first, and that window still gets Grass,
+    /// Man Page, Violet, or Red Sands.
+    static func testNewWindowKeepsTheBlobColor() {
+        let desk = try! String(contentsOfFile: "NotchBuddy/Sources/App/TerminalDesk.swift", encoding: .utf8)
+        let created = sourceSlice(desk, from: "func openNew(", until: "enum CotypistLink")
+        let createdMove = created.range(of: "moveTabToOwnWindow")
+        let createdColor = created.range(of: "profileCommands")
+        precondition(
+            createdMove != nil && createdColor != nil && createdMove!.lowerBound < createdColor!.lowerBound,
+            "a new window takes the blob color after it leaves the tab"
+        )
+        let placed = sourceSlice(desk, from: "func placeMany(", until: "func useShellProfile")
+        let placedMove = placed.range(of: "moveTabToOwnWindow")
+        let placedColor = placed.range(of: "profileCommands")
+        precondition(
+            placedMove != nil && placedColor != nil && placedMove!.lowerBound < placedColor!.lowerBound,
+            "placing that window in its corner keeps the blob color"
+        )
+        let paint = sourceSlice(desk, from: "func profileCommands", until: "func useShellProfile")
+        precondition(paint.contains("settings set profileName"), "the blob color is Grass, Man Page, Violet, or Red Sands")
+        let opener = sourceSlice(desk, from: "func openOrFocus(", until: "func togglePageLock(")
+        precondition(opener.contains("profile: shell"), "the click passes that blob's profile into the new window")
+        precondition(opener.contains("placeMany(batch, focus: focus, profile: shell)"), "the corner placement uses the same profile")
+    }
+
+    /// Grass, Man Page, Violet, and Red Sands replace the current settings and
+    /// put the font back to 11pt, which also shrinks the window. The size that
+    /// stays is applied after that color, and the corner is applied after the size.
+    static func testFontFillsTheCornerAfterTheColor() {
+        let desk = try! String(contentsOfFile: "NotchBuddy/Sources/App/TerminalDesk.swift", encoding: .utf8)
+        let created = sourceSlice(desk, from: "func openNew(", until: "enum CotypistLink")
+        let placed = sourceSlice(desk, from: "func placeMany(", until: "func useShellProfile")
+        for slice in [created, placed] {
+            let color = slice.range(of: "profileCommands")
+            precondition(color != nil, "the blob color is applied")
+            let font = slice.range(of: "font size of current settings", range: color!.upperBound..<slice.endIndex)
+            precondition(font != nil, "the font is set after the color, or the profile puts it back to 11")
+            let corner = slice.range(of: "set bounds", range: font!.upperBound..<slice.endIndex)
+            precondition(corner != nil, "the corner is set after the font, or the window shrinks to the profile size")
+        }
+        let paint = sourceSlice(desk, from: "func useShellProfile", until: "func focus(")
+        let switched = paint.range(of: "settings set profileName")
+        precondition(switched != nil, "the follow-up still applies the blob color")
+        let kept = paint.range(of: "font size of current settings", range: switched!.upperBound..<paint.endIndex)
+        precondition(kept != nil, "the follow-up color keeps the larger font")
+        let restored = paint.range(of: "set bounds", range: kept!.upperBound..<paint.endIndex)
+        precondition(restored != nil, "the follow-up color puts the window back in its corner")
+        let opener = sourceSlice(desk, from: "func openOrFocus(", until: "func togglePageLock(")
+        let follow = opener.range(of: "useShellProfile")
+        precondition(follow != nil, "a new window still takes its color after it is placed")
+        precondition(
+            opener.range(of: "bounds:", range: follow!.lowerBound..<opener.endIndex) != nil,
+            "that follow-up is given the corner so it can put the window back"
+        )
+    }
+
+    /// The notch click and the blob gesture both see one press. The second one
+    /// must not start another terminal while the first is still opening.
+    static func testOneClickOpensOneWindow() {
+        precondition(TerminalBehavior.startsOneWindow(inFlight: false), "the first press opens the color")
+        precondition(TerminalBehavior.startsOneWindow(inFlight: true) == false, "a press already opening that color does not open a tab as well")
+        let desk = try! String(contentsOfFile: "NotchBuddy/Sources/App/TerminalDesk.swift", encoding: .utf8)
+        let opener = sourceSlice(desk, from: "func openOrFocus(", until: "func togglePageLock(")
+        let gate = opener.range(of: "startsOneWindow")
+        let created = opener.range(of: "TerminalBridge.openOrFocus")
+        precondition(
+            gate != nil && created != nil && gate!.lowerBound < created!.lowerBound,
+            "the extra press is ignored before a second terminal starts"
+        )
+    }
     static func testCollapsedBlobsStayBesideTheCamera() {
         let notch: CGFloat = 251
         let island = notch + TerminalBehavior.collapsedWing * 2
@@ -761,6 +1016,20 @@ enum TerminalBehaviorTests {
         )
         let sizing = try! String(contentsOfFile: "NotchBuddy/Sources/App/IslandWindowController.swift", encoding: .utf8)
         precondition(sizing.contains("collapsedWing"), "the closed notch is wide enough for both ears")
+    }
+
+    /// The orange corner light is a terminal's idle status. A blob with no
+    /// window leaves that light off. A connected terminal keeps it.
+    static func testEmptyBlobHidesTheCornerLight() {
+        precondition(TerminalBehavior.showsStatusLight(connected: false) == false, "a blob with no terminal leaves the corner light off")
+        precondition(TerminalBehavior.showsStatusLight(connected: true), "a connected terminal keeps its corner light")
+        let view = try! String(contentsOfFile: "NotchBuddy/Sources/App/TerminalNotchView.swift", encoding: .utf8)
+        let open = sourceSlice(view, from: "struct TerminalFaceButton", until: "struct TerminalPageLockButton")
+        let compact = sourceSlice(view, from: "struct CompactTerminalFaces", until: "struct TerminalSettingsSection")
+        precondition(open.contains("showsStatusLight"), "the open blob light follows whether a terminal is connected")
+        precondition(compact.contains("showsStatusLight"), "the closed-notch corner light follows whether a terminal is connected")
+        precondition(open.contains("slot.windowID"), "the open blob checks its own window")
+        precondition(compact.contains("slot.windowID"), "the closed notch checks its own window")
     }
 
     /// Each terminal face is a different cuddler. Idle, a response, and a question do not share one pose.

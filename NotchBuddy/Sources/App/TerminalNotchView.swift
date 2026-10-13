@@ -112,10 +112,12 @@ struct TerminalFaceButton: View {
                 }
             }
             HStack(spacing: 4) {
-                Circle()
-                    .fill(Color(hex: TerminalBehavior.statusColorHex(for: reading)))
-                    .frame(width: 6, height: 6)
-                    .accessibilityHidden(true)
+                if TerminalBehavior.showsStatusLight(connected: slot.windowID != nil) {
+                    Circle()
+                        .fill(Color(hex: TerminalBehavior.statusColorHex(for: reading)))
+                        .frame(width: 6, height: 6)
+                        .accessibilityHidden(true)
+                }
                 TerminalNameLabel(slotID: slot.id, name: name, selected: selected, desk: desk)
             }
         }
@@ -348,12 +350,14 @@ struct CompactTerminalFaces: View {
                     }
                     .frame(width: 12, height: 12)
                     .overlay(alignment: .bottomTrailing) {
+                        if TerminalBehavior.showsStatusLight(connected: slot.windowID != nil) {
                             Circle()
                                 .fill(Color(hex: TerminalBehavior.statusColorHex(for: reading)))
                                 .frame(width: TerminalBehavior.collapsedStatusLight, height: TerminalBehavior.collapsedStatusLight)
                                 .offset(x: TerminalBehavior.collapsedStatusShift, y: TerminalBehavior.collapsedStatusShift)
                                 .accessibilityHidden(true)
                         }
+                    }
                 }
                 .help("\(name). \(phrase). Click brings this terminal forward. Hold to put it in the \(TerminalBehavior.cornerPhrase(slot.id)).")
                 .accessibilityLabel("\(name). \(phrase). Opens in the \(TerminalBehavior.cornerPhrase(slot.id)).")

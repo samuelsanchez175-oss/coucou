@@ -93,6 +93,10 @@ final class TerminalDesk: ObservableObject {
     private var placeGeneration = 0
     /// When the first Terminal window was listed. Plain shells stay claimable for startupGrace after this.
     private var firstWindowsAt: Date?
+    /// Consecutive listings that omitted a saved window. One miss is not a close.
+    private var marriageMisses: [String: Int] = [:]
+    /// Colors whose new terminal is still being created. A second press must not start a tab too.
+    private var opening: Set<String> = []
     private let defaults = UserDefaults.standard
     private let storeKey = "nook.terminals"
 
@@ -320,11 +324,14 @@ final class TerminalDesk: ObservableObject {
         ).windowID
     }
 
-    /// Bring the married window forward. The frame stays where it is.
+    /// A click raises the married window and leaves its frame. An empty color opens one.
     func focus(_ id: String) {
         select(id)
         guard let slot = slots.first(where: { $0.id == id }) else { return }
-        guard let windowID = resolvedWindowID(slot) else { return }
+        guard let windowID = resolvedWindowID(slot) else {
+            openOrFocus(id)
+            return
+        }
         Task {
             await Task.detached {
                 TerminalBridge.focus(windowID)
@@ -351,14 +358,20 @@ final class TerminalDesk: ObservableObject {
             return (wid, frame)
         }
         let focusID = windowID
+        let creating = focusID == nil
+        if creating {
+            guard TerminalBehavior.startsOneWindow(inFlight: opening.contains(id)) else { return }
+            opening.insert(id)
+        }
+        let shell = creating ? TerminalBehavior.shellProfile(id) : ""
         beginPlace()
         Task {
             let tiled = await Task.detached { () -> (TerminalBridge.Outcome, [TerminalBridge.PlacedWindow]) in
-                var outcome = TerminalBridge.openOrFocus(windowID: focusID, folder: folder, bounds: clicked)
+                var outcome = TerminalBridge.openOrFocus(windowID: focusID, folder: folder, bounds: clicked, profile: shell)
                 guard let focus = outcome.windowID else { return (outcome, []) }
                 var batch = others
                 batch.append((focus, clicked))
-                let placed = TerminalBridge.placeMany(batch, focus: focus)
+                let placed = TerminalBridge.placeMany(batch, focus: focus, profile: shell)
                 if let mine = placed.first(where: { $0.requestedID == focus || $0.windowID == focus }) {
                     outcome.windowID = mine.windowID
                     if !mine.title.isEmpty { outcome.windowTitle = mine.title }
@@ -366,6 +379,14 @@ final class TerminalDesk: ObservableObject {
                 return (outcome, placed)
             }.value
             apply(id, tiled.0)
+            if creating { opening.remove(id) }
+            if creating, let opened = tiled.0.windowID {
+                let profile = TerminalBehavior.shellProfile(id)
+                let corner = clicked
+                await Task.detached {
+                    TerminalBridge.useShellProfile(opened, profile: profile, bounds: corner)
+                }.value
+            }
             notePlaced(tiled.1)
             endPlace()
         }
@@ -482,11 +503,10 @@ final class TerminalDesk: ObservableObject {
             Self.commandsByTTY(ttyList)
         }.value
         let sessions = liveSessions
-        let corners = cornerWindows(in: snapshot)
+        _ = cornerWindows(in: snapshot)
         let quadrants = cornerFrames()
         var nextTitles: [String: String] = [:]
         var resolved: [(windowID: Int?, tty: String, ended: Bool, originalID: Int?, droppedSession: Bool)] = []
-        var seenIDs: [Int?] = slots.map(\.windowID)
         var freshlyClaimed: Set<String> = []
         for (index, slot) in slots.enumerated() {
             let originalID = slots[index].windowID
@@ -505,20 +525,17 @@ final class TerminalDesk: ObservableObject {
                 windowID = originalID
                 droppedSession = false
             }
-            if windowID == nil, snapshot.listed, let quadrant = quadrants[slot.id] {
-                let taken = Set(seenIDs.enumerated().compactMap { offset, item in
-                    offset == index ? nil : item
-                })
-                if let adopted = TerminalBehavior.windowInCorner(quadrant: quadrant, windows: corners, taken: taken) {
-                    windowID = adopted
+            if ended {
+                let seen = (marriageMisses[slot.id] ?? 0) + 1
+                marriageMisses[slot.id] = seen
+                if !TerminalBehavior.releaseMarriage(terminated: true, misses: seen) {
                     ended = false
-                    freshlyClaimed.insert(slot.id)
-                    if let found = snapshot.windows.first(where: { $0.id == adopted }), !found.tty.isEmpty {
-                        tty = found.tty
-                    }
+                    windowID = originalID
+                    droppedSession = false
                 }
+            } else {
+                marriageMisses[slot.id] = 0
             }
-            seenIDs[index] = windowID
             resolved.append((windowID, tty, ended, originalID, droppedSession))
         }
         if snapshot.listed {
@@ -528,6 +545,46 @@ final class TerminalDesk: ObservableObject {
             let acceptPlain = firstWindowsAt.map {
                 Date().timeIntervalSince($0) < TerminalBehavior.startupGrace
             } ?? true
+            let open = snapshot.windows.map { window in
+                let ttyName = (window.tty as NSString).lastPathComponent
+                return TerminalBehavior.ListedWindow(
+                    id: window.id,
+                    title: window.title,
+                    bounds: window.bounds,
+                    tty: window.tty,
+                    process: commands[ttyName] ?? ""
+                )
+            }
+            let seated = TerminalBehavior.marriagesForCorners(
+                slots: resolved.enumerated().map { index, row in
+                    TerminalBehavior.CornerClaim(
+                        id: slots[index].id,
+                        windowID: row.windowID,
+                        tty: row.windowID == nil ? "" : row.tty,
+                        lockedName: slots[index].lockedName
+                    )
+                },
+                windows: open,
+                quadrants: quadrants
+            )
+            for index in resolved.indices {
+                let was = resolved[index].windowID
+                let now = seated[index].windowID
+                if was != nil, now == nil {
+                    resolved[index].windowID = nil
+                    resolved[index].tty = ""
+                    resolved[index].ended = true
+                    resolved[index].droppedSession = true
+                } else if was == nil, now != nil {
+                    resolved[index].windowID = now
+                    resolved[index].tty = seated[index].tty
+                    resolved[index].ended = false
+                    freshlyClaimed.insert(slots[index].id)
+                    if slots[index].lockedName.isEmpty, !seated[index].lockedName.isEmpty {
+                        slots[index].lockedName = seated[index].lockedName
+                    }
+                }
+            }
             let picture = resolved.enumerated().map { index, row in
                 TerminalBehavior.ClaimSlot(
                     id: slots[index].id,
@@ -540,18 +597,10 @@ final class TerminalDesk: ObservableObject {
             })
             let claimed = TerminalBehavior.claimFreeWindows(
                 slots: picture,
-                open: snapshot.windows.map { window in
-                    let ttyName = (window.tty as NSString).lastPathComponent
-                    return TerminalBehavior.ListedWindow(
-                        id: window.id,
-                        title: window.title,
-                        bounds: window.bounds,
-                        tty: window.tty,
-                        process: commands[ttyName] ?? ""
-                    )
-                },
+                open: open,
                 freeIDs: freeIDs,
-                acceptPlain: acceptPlain
+                acceptPlain: acceptPlain,
+                quadrants: quadrants
             )
             for index in resolved.indices where resolved[index].windowID == nil {
                 if let adopted = claimed[index].windowID {
@@ -1029,7 +1078,7 @@ enum TerminalBridge {
         )
     }
 
-    nonisolated static func openOrFocus(windowID: Int?, folder: String, bounds: TerminalBehavior.TerminalBounds) -> Outcome {
+    nonisolated static func openOrFocus(windowID: Int?, folder: String, bounds: TerminalBehavior.TerminalBounds, profile: String = "") -> Outcome {
         if let windowID, let placed = place(windowID, bounds) {
             return Outcome(
                 ok: true,
@@ -1039,7 +1088,7 @@ enum TerminalBridge {
                 windowTitle: placed.title
             )
         }
-        return openNew(folder: folder, bounds: bounds)
+        return openNew(folder: folder, bounds: bounds, profile: profile)
     }
 
     nonisolated static func send(_ text: String, windowID: Int?, folder: String, bounds: TerminalBehavior.TerminalBounds) -> Outcome {
@@ -1244,9 +1293,9 @@ enum TerminalBridge {
 
     /// Snap every listed window into its corner, then optionally bring one forward.
     /// Each result names the window that owns the session after a tab is pulled out.
-    nonisolated static func placeMany(_ windows: [(Int, TerminalBehavior.TerminalBounds)], focus: Int) -> [PlacedWindow] {
+    nonisolated static func placeMany(_ windows: [(Int, TerminalBehavior.TerminalBounds)], focus: Int, profile: String = "") -> [PlacedWindow] {
         guard !windows.isEmpty else { return [] }
-        var args = [String(focus)]
+        var args = [String(focus), profile]
         for (id, bounds) in windows {
             args.append(contentsOf: [
                 String(id),
@@ -1259,10 +1308,11 @@ enum TerminalBridge {
         let script = """
         on run argv
           set focusID to item 1 of argv as integer
+          set profileName to item 2 of argv
           set focusTarget to focusID
           set names to {}
           set placedIDs to {}
-          set i to 2
+          set i to 3
           tell application "Terminal"
             \(rememberWindowFrames)
             repeat while (i + 4) is less than or equal to (count of argv)
@@ -1297,6 +1347,13 @@ enum TerminalBridge {
                     end repeat
                   end if
                   set bounds of placedWindow to {leftEdge, topEdge, rightEdge, bottomEdge}
+                  if requested is focusID then
+                    \(Self.profileCommands(for: "placedWindow"))
+                    try
+                      set font size of current settings of selected tab of placedWindow to \(TerminalBehavior.terminalFontSize)
+                    end try
+                    set bounds of placedWindow to {leftEdge, topEdge, rightEdge, bottomEdge}
+                  end if
                   try
                     set wid to id of placedWindow
                   end try
@@ -1334,11 +1391,45 @@ enum TerminalBridge {
         return placed
     }
 
-    /// A plain shell takes Grass, Man Page, Violet, or Red Sands. Tool windows stay as they are.
-    /// Violet is created from Grass the first time a purple shell needs it.
-    nonisolated static func useShellProfile(_ windowID: Int, profile: String) {
+    /// Grass, Man Page, Violet, or Red Sands, applied to the window that is already on its own.
+    /// An empty name leaves the window alone. Violet is created from Grass the first time.
+    nonisolated private static func profileCommands(for windowVar: String) -> String {
         let background = TerminalBehavior.violetBackground
         let text = TerminalBehavior.violetText
+        return """
+            if profileName is not "" then
+              if profileName is "Violet" then
+                if not (exists settings set "Violet") then
+                  try
+                    duplicate settings set "Grass" to end of settings sets with properties {name:"Violet"}
+                    set background color of settings set "Violet" to {\(background.red), \(background.green), \(background.blue)}
+                    set normal text color of settings set "Violet" to {\(text.red), \(text.green), \(text.blue)}
+                    set bold text color of settings set "Violet" to {\(text.red), \(text.green), \(text.blue)}
+                    set cursor color of settings set "Violet" to {\(text.red), \(text.green), \(text.blue)}
+                  end try
+                end if
+              end if
+              try
+                set current settings of selected tab of \(windowVar) to settings set profileName
+              end try
+            end if
+        """
+    }
+
+    /// A plain shell takes Grass, Man Page, Violet, or Red Sands. Tool windows stay as they are.
+    /// Violet is created from Grass the first time a purple shell needs it.
+    nonisolated static func useShellProfile(_ windowID: Int, profile: String, bounds: TerminalBehavior.TerminalBounds? = nil) {
+        let background = TerminalBehavior.violetBackground
+        let text = TerminalBehavior.violetText
+        var args = [String(windowID), profile]
+        if let bounds {
+            args.append(contentsOf: [
+                String(bounds.left),
+                String(bounds.top),
+                String(bounds.right),
+                String(bounds.bottom),
+            ])
+        }
         let script = """
         on run argv
           set wid to item 1 of argv as integer
@@ -1360,11 +1451,22 @@ enum TerminalBridge {
             try
               set current settings of selected tab of window id wid to settings set profileName
             end try
+            if (count of argv) > 2 then
+              set keptWindow to window id wid
+              try
+                set font size of current settings of selected tab of keptWindow to \(TerminalBehavior.terminalFontSize)
+              end try
+              set leftEdge to item 3 of argv as integer
+              set topEdge to item 4 of argv as integer
+              set rightEdge to item 5 of argv as integer
+              set bottomEdge to item 6 of argv as integer
+              set bounds of keptWindow to {leftEdge, topEdge, rightEdge, bottomEdge}
+            end if
           end tell
           return "yes"
         end run
         """
-        _ = OSAScript.run(script, args: [String(windowID), profile])
+        _ = OSAScript.run(script, args: args)
     }
 
     nonisolated static func focus(_ windowID: Int) -> Bool {
@@ -1374,16 +1476,25 @@ enum TerminalBridge {
           if application "Terminal" is not running then return "no"
           tell application "Terminal"
             if not (exists window id wid) then return "no"
+            set miniaturized of window id wid to false
             set index of window id wid to 1
             activate
           end tell
           return "yes"
         end run
         """
-        return OSAScript.run(script, args: [String(windowID)]) == "yes"
+        let raised = OSAScript.run(script, args: [String(windowID)]) == "yes"
+        if raised {
+            DispatchQueue.main.async {
+                NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Terminal")
+                    .first?
+                    .activate(options: [.activateIgnoringOtherApps])
+            }
+        }
+        return raised
     }
 
-    nonisolated private static func openNew(folder: String, bounds: TerminalBehavior.TerminalBounds) -> Outcome {
+    nonisolated private static func openNew(folder: String, bounds: TerminalBehavior.TerminalBounds, profile: String = "") -> Outcome {
         let script = """
         on run argv
           set folderPath to item 1 of argv
@@ -1391,6 +1502,7 @@ enum TerminalBridge {
           set topEdge to item 3 of argv as integer
           set rightEdge to item 4 of argv as integer
           set bottomEdge to item 5 of argv as integer
+          set profileName to item 6 of argv
           set cmd to "export PATH=\\"$HOME/.grok/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\\"; cd " & quoted form of folderPath & " && if command -v grok >/dev/null 2>&1; then exec grok; else echo 'Grok CLI not found'; fi"
           tell application "Terminal"
             \(rememberWindowFrames)
@@ -1414,6 +1526,11 @@ enum TerminalBridge {
               end try
             end repeat
             if theWindow is missing value then return "no-window"
+            set bounds of theWindow to {leftEdge, topEdge, rightEdge, bottomEdge}
+            \(Self.profileCommands(for: "theWindow"))
+            try
+              set font size of current settings of selected tab of theWindow to \(TerminalBehavior.terminalFontSize)
+            end try
             set bounds of theWindow to {leftEdge, topEdge, rightEdge, bottomEdge}
             try
               set wid to id of theWindow
@@ -1441,6 +1558,7 @@ enum TerminalBridge {
             String(bounds.top),
             String(bounds.right),
             String(bounds.bottom),
+            profile,
         ]) ?? ""
         let bits = reply.components(separatedBy: "\u{1f}")
         guard let id = Int(bits.first ?? "") else {

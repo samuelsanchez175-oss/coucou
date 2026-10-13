@@ -134,6 +134,48 @@ enum NookLayout {
         return max(row, nookTabBarWidth) + nookPageInset
     }
 
+    /// A current title means the player is on screen, including while it is paused.
+    static func mediaIsLive(title: String?) -> Bool {
+        nonempty(title) != nil
+    }
+
+    /// Playing media takes the wide column and the calendar keeps the next event.
+    /// A quiet player shrinks, and the calendar uses its normal width.
+    /// A compact column can sit under the stored cell count. A wide one cannot.
+    static func columnWidth(id: String, cells: Int, contentPadding: CGFloat, mediaLive: Bool) -> CGFloat {
+        let content: CGFloat
+        let compact: Bool
+        switch id {
+        case "media":
+            content = mediaLive ? 320 : 148
+            compact = !mediaLive
+        case "calendar":
+            content = mediaLive ? 112 : singleLineWidth(id)
+            compact = mediaLive
+        default:
+            content = singleLineWidth(id)
+            compact = false
+        }
+        let minimum = content + columnPadding(id, contentPadding: contentPadding) * 2
+        let needed = Int(ceil(minimum / pointsPerCell))
+        let fitted = compact ? max(1, needed) : max(max(1, cells), needed)
+        return CGFloat(fitted) * pointsPerCell
+    }
+
+    static func nookDrawerWidth(
+        columns: [NookColumnSpec],
+        dividers: Bool,
+        contentPadding: CGFloat,
+        mediaLive: Bool
+    ) -> CGFloat {
+        let widths = columns.map {
+            columnWidth(id: $0.id, cells: $0.cells, contentPadding: contentPadding, mediaLive: mediaLive)
+        }
+        let gaps = (dividers && widths.count > 1) ? CGFloat(widths.count - 1) * widgetDivider : 0
+        let row = widths.reduce(0, +) + gaps
+        return max(row, nookTabBarWidth) + nookPageInset
+    }
+
     static func includeEvent(
         _ event: NookEventFact,
         now: Date,
@@ -536,6 +578,117 @@ enum NookLayout {
         guard !paths.isEmpty else { return false }
         if paths == previous, elapsed < 0.8 { return false }
         return true
+    }
+
+    /// First event on the selected day. Today uses the next one that has not ended.
+    /// An empty list stays empty. This does not look at another day.
+    static func leadEvent(_ events: [NookEventFact], now: Date, upcomingOnly: Bool) -> NookEventFact? {
+        let sorted = events.sorted { lhs, rhs in
+            if lhs.start == rhs.start { return lhs.title < rhs.title }
+            return lhs.start < rhs.start
+        }
+        if upcomingOnly { return sorted.first { $0.end > now } }
+        return sorted.first
+    }
+
+    /// Calendar opens on the event's start. `calshow:` is seconds since the reference date.
+    static func calendarShowURL(start: Date) -> URL? {
+        URL(string: "calshow:\(start.timeIntervalSinceReferenceDate)")
+    }
+
+    /// An event marks the lamp when it starts within this window, or started inside it and has not ended.
+    static let lampSoon: TimeInterval = 15 * 60
+
+    static func soonEvent(now: Date, events: [NookEventFact]) -> NookEventFact? {
+        events
+            .filter { event in
+                guard !event.isAllDay, event.end > now else { return false }
+                let until = event.start.timeIntervalSince(now)
+                return until >= -lampSoon && until <= lampSoon
+            }
+            .sorted { lhs, rhs in
+                if lhs.start == rhs.start { return lhs.title < rhs.title }
+                return lhs.start < rhs.start
+            }
+            .first
+    }
+
+    static func lampMarked(timerEnded: Bool, soon: NookEventFact?) -> Bool {
+        timerEnded || soon != nil
+    }
+
+    static func lampHint(timerEnded: Bool, eventTitle: String?) -> String {
+        let title = nonempty(eventTitle)
+        switch (timerEnded, title) {
+        case (true, let title?):
+            return "\(title) is soon, and the timer ended. Opens the Nook."
+        case (true, nil):
+            return "The timer ended. Opens the Nook."
+        case (false, let title?):
+            return "\(title) is soon. Opens the Nook."
+        case (false, nil):
+            return "Opens the Nook."
+        }
+    }
+
+    /// Left of the white blob when the ear is tight. Between the blob and the housing when there is room.
+    static func closedLampCenterX(whiteCenter: CGFloat, housingLeading: CGFloat) -> CGFloat {
+        let gap: CGFloat = 20
+        let between = whiteCenter + gap
+        if between + 8 < housingLeading { return between }
+        return max(12, whiteCenter - gap)
+    }
+
+    /// Remaining to-dos. A checked row is already gone from this count.
+    static func todosHeading(left: Int) -> String {
+        switch left {
+        case ..<1: return "Nothing left"
+        case 1: return "1 left"
+        default: return "\(left) left"
+        }
+    }
+
+    struct NookLastTrack: Equatable, Codable {
+        var title: String
+        var artist: String
+        var source: String
+        var usesRemote: Bool
+        var bundleID: String
+    }
+
+    enum NookResume: Equatable {
+        case remote
+        case player(source: String, bundleID: String)
+        case open(bundleID: String)
+    }
+
+    static func rememberedTrack(
+        title: String?,
+        artist: String?,
+        source: String?,
+        usesRemote: Bool,
+        bundleID: String
+    ) -> NookLastTrack? {
+        guard let title = nonempty(title) else { return nil }
+        return NookLastTrack(
+            title: title,
+            artist: nonempty(artist) ?? "",
+            source: nonempty(source) ?? "",
+            usesRemote: usesRemote,
+            bundleID: bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+    }
+
+    /// One press resumes the last song. A remote session toggles. Music and Spotify
+    /// use their player. Anything else opens the app that had the title.
+    static func resume(_ track: NookLastTrack) -> NookResume? {
+        guard nonempty(track.title) != nil else { return nil }
+        if track.usesRemote { return .remote }
+        if track.source == "music" || track.source == "spotify" {
+            return .player(source: track.source, bundleID: track.bundleID)
+        }
+        guard let id = nonempty(track.bundleID) else { return nil }
+        return .open(bundleID: id)
     }
 
     private static func nonempty(_ value: String?) -> String? {
@@ -1395,29 +1548,30 @@ enum NookPictureInPicture {
         outcome(read) == .entered && pictureOnScreen
     }
 
-    /// Where the button puts a new picture. Another desktop is mirrored onto this one.
+    /// Where the button puts a new picture. Another desktop is shown, then the browser opens its own picture.
     enum PictureRoute: Equatable {
         case enterHere
-        case mirrorHere
+        case showThenEnter
     }
 
     static func route(browserOnThisDesktop: Bool) -> PictureRoute {
-        browserOnThisDesktop ? .enterHere : .mirrorHere
+        browserOnThisDesktop ? .enterHere : .showThenEnter
     }
 
-    /// Where a press lands. A picture on another desktop is shown here.
+    /// Where a press lands. A picture on another desktop is the browser's own window, moved here.
     enum PicturePlace: Equatable {
         case enterHere
+        case showThenEnter
         case raiseHere
-        case mirrorHere
+        case bringHere
     }
 
     static func place(step: Step, browserOnThisDesktop: Bool, pictureOnThisDesktop: Bool) -> PicturePlace? {
         switch step {
         case .enterWithoutLeaving:
-            return browserOnThisDesktop ? .enterHere : .mirrorHere
+            return browserOnThisDesktop ? .enterHere : .showThenEnter
         case .showExisting:
-            return pictureOnThisDesktop ? .raiseHere : .mirrorHere
+            return pictureOnThisDesktop ? .raiseHere : .bringHere
         case .exitWithoutLeaving, .unavailable:
             return nil
         }
@@ -1700,7 +1854,7 @@ enum NookPictureInPicture {
     static func buttonHelp(active: Bool) -> String {
         active
             ? "Puts the video back in its window."
-            : "Floats the playing picture above your other windows."
+            : "Opens the browser's own floating picture above your other windows. Coucou does not record the screen."
     }
 
     /// Installed on the page, then fired by one real click. A scripted call is rejected.
@@ -1944,5 +2098,390 @@ enum NowPlayingWireLine {
         }
         if number.isNaN || number < 0 { return 0 }
         return number
+    }
+}
+
+/// Rich text is the default. Code colors the same words.
+enum NookNoteMode: String, Equatable {
+    case rich
+    case code
+}
+
+/// A file written next to the note. Rich text bytes stay on the note itself.
+enum NookNoteExport: String, Equatable {
+    case plain
+    case richText
+    case markdown
+}
+
+struct NookNoteSpan: Equatable {
+    enum Kind: String, Equatable {
+        case heading
+        case emphasis
+        case code
+        case comment
+    }
+
+    var kind: Kind
+    /// UTF-16 offsets, the same indexes NSString uses.
+    var start: Int
+    var end: Int
+}
+
+/// Heading, emphasis, inline code, and comments for the code note.
+enum NookNotes {
+    static func highlight(_ source: String) -> [NookNoteSpan] {
+        let text = source as NSString
+        let length = text.length
+        guard length > 0 else { return [] }
+        let code = codeRanges(in: text, length: length)
+        return code.map { NookNoteSpan(kind: .code, start: $0.lowerBound, end: $0.upperBound) }
+            + emphasisSpans(in: text, length: length, code: code)
+            + lineSpans(in: text, length: length, code: code)
+    }
+
+    static func exportFilename(_ format: NookNoteExport) -> String {
+        switch format {
+        case .plain: return "Note.txt"
+        case .richText: return "Note.rtf"
+        case .markdown: return "Note.md"
+        }
+    }
+
+    /// Plain text and Markdown export the words. Rich text uses the stored RTF.
+    static func exportText(mode: NookNoteMode, plain: String, format: NookNoteExport) -> String? {
+        switch (mode, format) {
+        case (_, .richText):
+            return nil
+        case (.rich, .plain), (.rich, .markdown), (.code, .plain), (.code, .markdown):
+            return plain
+        }
+    }
+
+    private static func codeRanges(in text: NSString, length: Int) -> [Range<Int>] {
+        var ranges: [Range<Int>] = []
+        var index = 0
+        while index < length {
+            if text.character(at: index) == 0x60, let close = closingBacktick(in: text, from: index + 1, length: length) {
+                ranges.append(index..<(close + 1))
+                index = close + 1
+                continue
+            }
+            index += 1
+        }
+        return ranges
+    }
+
+    /// The next backtick on this line. An empty pair and a pair past a line break do not count.
+    private static func closingBacktick(in text: NSString, from start: Int, length: Int) -> Int? {
+        var index = start
+        while index < length {
+            let character = text.character(at: index)
+            if character == 0x0A || character == 0x0D { return nil }
+            if character == 0x60, index > start { return index }
+            index += 1
+        }
+        return nil
+    }
+
+    private static func covers(_ ranges: [Range<Int>], _ index: Int) -> Bool {
+        ranges.contains { $0.contains(index) }
+    }
+
+    private static func emphasisSpans(in text: NSString, length: Int, code: [Range<Int>]) -> [NookNoteSpan] {
+        var spans: [NookNoteSpan] = []
+        var index = 0
+        while index + 1 < length {
+            if text.character(at: index) == 0x2A,
+               text.character(at: index + 1) == 0x2A,
+               !covers(code, index),
+               let close = closingEmphasis(in: text, from: index + 2, length: length, code: code) {
+                spans.append(NookNoteSpan(kind: .emphasis, start: index, end: close + 2))
+                index = close + 2
+                continue
+            }
+            index += 1
+        }
+        return spans
+    }
+
+    /// The closing pair on this line, outside inline code. An empty pair does not count.
+    private static func closingEmphasis(in text: NSString, from start: Int, length: Int, code: [Range<Int>]) -> Int? {
+        var index = start
+        while index + 1 < length {
+            let character = text.character(at: index)
+            if character == 0x0A || character == 0x0D { return nil }
+            if let range = code.first(where: { $0.contains(index) }) {
+                index = range.upperBound
+                continue
+            }
+            if character == 0x2A, text.character(at: index + 1) == 0x2A, index > start {
+                return index
+            }
+            index += 1
+        }
+        return nil
+    }
+
+    private static func lineSpans(in text: NSString, length: Int, code: [Range<Int>]) -> [NookNoteSpan] {
+        var spans: [NookNoteSpan] = []
+        var lineStart = 0
+        var index = 0
+        while index <= length {
+            let broken = index == length || text.character(at: index) == 0x0A || text.character(at: index) == 0x0D
+            if broken {
+                if index > lineStart {
+                    spans.append(contentsOf: spansOnLine(text, lineStart: lineStart, lineEnd: index, code: code))
+                }
+                if index == length { break }
+                if text.character(at: index) == 0x0D, index + 1 < length, text.character(at: index + 1) == 0x0A {
+                    index += 2
+                } else {
+                    index += 1
+                }
+                lineStart = index
+                continue
+            }
+            index += 1
+        }
+        return spans
+    }
+
+    private static func spansOnLine(_ text: NSString, lineStart: Int, lineEnd: Int, code: [Range<Int>]) -> [NookNoteSpan] {
+        var spans: [NookNoteSpan] = []
+        var cursor = lineStart
+        while cursor < lineEnd {
+            let character = text.character(at: cursor)
+            if character != 0x20 && character != 0x09 { break }
+            cursor += 1
+        }
+        if cursor < lineEnd, text.character(at: cursor) == 0x23, !covers(code, cursor) {
+            spans.append(NookNoteSpan(kind: .heading, start: lineStart, end: lineEnd))
+        }
+        var index = lineStart
+        while index + 1 < lineEnd {
+            if text.character(at: index) == 0x2F,
+               text.character(at: index + 1) == 0x2F,
+               !covers(code, index),
+               !covers(code, index + 1) {
+                spans.append(NookNoteSpan(kind: .comment, start: index, end: lineEnd))
+                break
+            }
+            index += 1
+        }
+        return spans
+    }
+}
+
+/// One shortcut on this Mac. An empty folder means it is not filed.
+struct NookShortcut: Equatable, Identifiable, Sendable {
+    var name: String
+    var identifier: String
+    var folder: String
+    var id: String { identifier }
+}
+
+/// A folder of the shortcuts the person chose. No title when nothing is filed.
+struct NookShortcutSection: Equatable, Identifiable {
+    var title: String?
+    var shortcuts: [NookShortcut]
+    var id: String { title ?? "all" }
+}
+
+/// Which shortcuts appear in the notch, and how those buttons sit.
+enum NookShortcuts {
+    static let unfiledTitle = "No folder"
+    static let loadFailed = "Shortcuts could not be loaded."
+
+    /// A line from `shortcuts list --show-identifiers`. A bare name uses itself as the id.
+    static func parseLine(_ line: String) -> (name: String, identifier: String)? {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let pattern = #"^(.+) \(([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})\)$"#
+        guard let expression = try? NSRegularExpression(pattern: pattern),
+              let match = expression.firstMatch(in: trimmed, range: NSRange(location: 0, length: (trimmed as NSString).length)),
+              match.numberOfRanges == 3,
+              let nameRange = Range(match.range(at: 1), in: trimmed),
+              let idRange = Range(match.range(at: 2), in: trimmed) else {
+            return (trimmed, trimmed)
+        }
+        let name = trimmed[nameRange].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return (trimmed, trimmed) }
+        return (name, String(trimmed[idRange]))
+    }
+
+    /// Folders in the order they were listed. The same shortcut is kept once.
+    static func catalog(groups: [(folder: String, lines: [String])]) -> [NookShortcut] {
+        var seen = Set<String>()
+        var items: [NookShortcut] = []
+        for group in groups {
+            for line in group.lines {
+                guard let parsed = parseLine(line) else { continue }
+                guard seen.insert(parsed.identifier).inserted else { continue }
+                items.append(NookShortcut(name: parsed.name, identifier: parsed.identifier, folder: group.folder))
+            }
+        }
+        return items
+    }
+
+    /// Chosen shortcuts that are still on this Mac, in folder order.
+    static func shown(catalog: [NookShortcut], picks: [String]) -> [NookShortcut] {
+        let chosen = Set(picks)
+        return catalog.filter { chosen.contains($0.identifier) }
+    }
+
+    static func setPick(_ identifier: String, on: Bool, picks: [String]) -> [String] {
+        var next = picks
+        if on {
+            if !next.contains(identifier) { next.append(identifier) }
+        } else {
+            next.removeAll { $0 == identifier }
+        }
+        return next
+    }
+
+    static func selectAll(_ catalog: [NookShortcut]) -> [String] {
+        catalog.map(\.identifier)
+    }
+
+    /// Drops a saved pick whose shortcut is gone. A failed load must not call this.
+    static func keptPicks(_ picks: [String], catalog: [NookShortcut]) -> [String] {
+        let live = Set(catalog.map(\.identifier))
+        return picks.filter { live.contains($0) }
+    }
+
+    /// Two shortcuts per row. A last odd one sits alone.
+    static func rows(_ items: [NookShortcut]) -> [[NookShortcut]] {
+        guard !items.isEmpty else { return [] }
+        var built: [[NookShortcut]] = []
+        var index = 0
+        while index < items.count {
+            let end = min(index + 2, items.count)
+            built.append(Array(items[index..<end]))
+            index = end
+        }
+        return built
+    }
+
+    static func sections(_ items: [NookShortcut]) -> [NookShortcutSection] {
+        var order: [String] = []
+        var grouped: [String: [NookShortcut]] = [:]
+        for item in items {
+            if grouped[item.folder] == nil { order.append(item.folder) }
+            grouped[item.folder, default: []].append(item)
+        }
+        let named = order.contains { !$0.isEmpty }
+        return order.map { folder in
+            let title: String?
+            if !named {
+                title = nil
+            } else if folder.isEmpty {
+                title = unfiledTitle
+            } else {
+                title = folder
+            }
+            return NookShortcutSection(title: title, shortcuts: grouped[folder] ?? [])
+        }
+    }
+
+    static func runningNote(_ name: String) -> String { "Running \(name)." }
+
+    static func finishedNote(name: String, exitCode: Int32) -> String {
+        exitCode == 0 ? "" : "\(name) did not run."
+    }
+}
+
+/// One installed app the person can put in the notch.
+struct NookQuickApp: Equatable, Identifiable, Sendable {
+    var name: String
+    var bundleID: String
+    var id: String { bundleID }
+}
+
+/// Which installed apps appear in the notch, and how those buttons sit.
+enum NookQuickApps {
+    static let loadFailed = "Apps could not be loaded."
+
+    /// Display name, then bundle name, then the app file name. A blank id is dropped.
+    static func entry(displayName: String?, bundleName: String?, fileName: String, bundleID: String) -> NookQuickApp? {
+        let id = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else { return nil }
+        let display = trimmed(displayName)
+        let bundle = trimmed(bundleName)
+        let file = (fileName as NSString).deletingPathExtension
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = !display.isEmpty ? display : (!bundle.isEmpty ? bundle : file)
+        guard !name.isEmpty else { return nil }
+        return NookQuickApp(name: name, bundleID: id)
+    }
+
+    /// Name order. The same bundle is kept once. A blank name or id is dropped.
+    static func catalog(apps: [(name: String, bundleID: String)]) -> [NookQuickApp] {
+        var seen = Set<String>()
+        var items: [NookQuickApp] = []
+        for app in apps {
+            guard let item = entry(displayName: app.name, bundleName: nil, fileName: "", bundleID: app.bundleID) else { continue }
+            guard seen.insert(item.bundleID).inserted else { continue }
+            items.append(item)
+        }
+        return items.sorted { lhs, rhs in
+            let order = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
+            if order == .orderedSame { return lhs.bundleID < rhs.bundleID }
+            return order == .orderedAscending
+        }
+    }
+
+    /// Chosen apps that are still installed, in catalog order.
+    static func shown(catalog: [NookQuickApp], picks: [String]) -> [NookQuickApp] {
+        let chosen = Set(picks)
+        return catalog.filter { chosen.contains($0.bundleID) }
+    }
+
+    /// The last opened app leads, when it is still chosen. The rest stay in catalog order.
+    static func ordered(catalog: [NookQuickApp], picks: [String], lastBundleID: String?) -> [NookQuickApp] {
+        let items = shown(catalog: catalog, picks: picks)
+        let last = lastBundleID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !last.isEmpty, let index = items.firstIndex(where: { $0.bundleID == last }) else { return items }
+        var next = items
+        let first = next.remove(at: index)
+        next.insert(first, at: 0)
+        return next
+    }
+
+    static func setPick(_ bundleID: String, on: Bool, picks: [String]) -> [String] {
+        var next = picks
+        if on {
+            if !next.contains(bundleID) { next.append(bundleID) }
+        } else {
+            next.removeAll { $0 == bundleID }
+        }
+        return next
+    }
+
+    static func selectAll(_ catalog: [NookQuickApp]) -> [String] {
+        catalog.map(\.bundleID)
+    }
+
+    /// Drops a saved pick whose app is gone. A failed load must not call this.
+    static func keptPicks(_ picks: [String], catalog: [NookQuickApp]) -> [String] {
+        let live = Set(catalog.map(\.bundleID))
+        return picks.filter { live.contains($0) }
+    }
+
+    /// Two apps per row. A last odd one sits alone.
+    static func rows(_ items: [NookQuickApp]) -> [[NookQuickApp]] {
+        guard !items.isEmpty else { return [] }
+        var built: [[NookQuickApp]] = []
+        var index = 0
+        while index < items.count {
+            let end = min(index + 2, items.count)
+            built.append(Array(items[index..<end]))
+            index = end
+        }
+        return built
+    }
+
+    private static func trimmed(_ value: String?) -> String {
+        value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 }

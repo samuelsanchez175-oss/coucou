@@ -330,6 +330,8 @@ enum NookPlaybackTests {
         precondition(NookPictureInPicture.buttonSymbol(active: true) == "pip.exit")
         precondition(NookPictureInPicture.buttonLabel(active: false) == "Picture in picture")
         precondition(NookPictureInPicture.buttonLabel(active: true) == "Exit picture in picture")
+        precondition(NookPictureInPicture.buttonHelp(active: false).contains("browser's own floating picture"))
+        precondition(NookPictureInPicture.buttonHelp(active: false).contains("does not record the screen"))
         precondition(NookPictureInPicture.hookScript().contains("requestPictureInPicture"))
         precondition(NookPictureInPicture.hookScript().contains("isTrusted"))
         precondition(NookPictureInPicture.hookScript().contains("preventDefault"))
@@ -402,18 +404,18 @@ enum NookPlaybackTests {
         precondition(!NookPictureInPicture.pictureReady(read: "in-pip entered", pictureOnScreen: false))
         precondition(!NookPictureInPicture.pictureReady(read: "not-pip entered", pictureOnScreen: true))
         precondition(NookPictureInPicture.route(browserOnThisDesktop: true) == .enterHere)
-        precondition(NookPictureInPicture.route(browserOnThisDesktop: false) == .mirrorHere)
-        // A picture that already exists on another desktop is brought here.
+        precondition(NookPictureInPicture.route(browserOnThisDesktop: false) == .showThenEnter)
+        // A picture that already exists on another desktop is the browser's own window, moved here.
         // A second event from the same press is ignored.
         precondition(NookPictureInPicture.place(
             step: .showExisting, browserOnThisDesktop: false, pictureOnThisDesktop: false
-        ) == .mirrorHere)
+        ) == .bringHere)
         precondition(NookPictureInPicture.place(
             step: .showExisting, browserOnThisDesktop: false, pictureOnThisDesktop: true
         ) == .raiseHere)
         precondition(NookPictureInPicture.place(
             step: .enterWithoutLeaving, browserOnThisDesktop: false, pictureOnThisDesktop: false
-        ) == .mirrorHere)
+        ) == .showThenEnter)
         precondition(NookPictureInPicture.place(
             step: .enterWithoutLeaving, browserOnThisDesktop: true, pictureOnThisDesktop: false
         ) == .enterHere)
@@ -482,7 +484,9 @@ enum NookPlaybackTests {
         let toggle = sourceSlice(text, from: "static func toggle(application:", until: "private struct Choice")
         precondition(toggle.contains("NookPictureInPicture.step"))
         precondition(toggle.contains(".showExisting"))
-        precondition(toggle.contains(".mirror("))
+        precondition(!toggle.contains(".mirror("), "the button does not open a screen capture")
+        precondition(toggle.contains("shownChoice("), "a window on another desktop is shown before the browser opens its picture")
+        precondition(toggle.contains("bringPicture("), "an existing picture is moved here instead of captured")
         precondition(toggle.contains("route(browserOnThisDesktop:"))
         precondition(toggle.contains("place(step:"))
         let mirrorStart = sourceSlice(text, from: "func startMirror", until: "func stopMirror")
@@ -518,8 +522,8 @@ enum NookPlaybackTests {
         precondition(clearAt < clickAt)
         precondition(enter.contains("nextPress(read:"))
         precondition(enter.contains("clickSpots("))
-        precondition(toggle.contains("offscreenPicture("))
-        precondition(toggle.contains("pictureCrop("))
+        let bring = sourceSlice(text, from: "func bringPicture", until: "func pictureSpot")
+        precondition(bring.contains("offscreenPicture("), "the existing picture is the browser window, not a capture")
         precondition(mirrorStart.contains("captureAsk("))
         precondition(!text.contains("nook.pipMirrorProbe"))
         precondition(!text.contains("coucou-pip-frames.txt"))

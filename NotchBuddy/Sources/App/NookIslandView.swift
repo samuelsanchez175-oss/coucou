@@ -13,15 +13,64 @@ struct NookView: View {
     @ObservedObject private var board = NookBoard.shared
 
     var body: some View {
-        NookWidgetRow(prefs: prefs, board: board)
-            .padding(.horizontal, 14)
-            .padding(.top, 8)
-            .padding(.bottom, 8)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .onAppear { board.nookVisible = state.view == .nook }
-            .onChange(of: state.view) { _, view in
-                board.nookVisible = view == .nook
+        VStack(spacing: 0) {
+            if board.timerEnded && !widgetOn("timer") {
+                noticeStrip(title: "Timer ended", action: "Dismiss") {
+                    board.dismissTimer()
+                }
+                .help("Clears the finished timer")
             }
+            if let event = board.soonEvent, !widgetOn("calendar") {
+                Button {
+                    board.openCalendarEvent(event)
+                } label: {
+                    HStack(spacing: 8) {
+                        Text(eventLine(event))
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                        Text("Open")
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    }
+                    .foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
+                .help("Opens this event in Calendar")
+                .accessibilityLabel(eventLine(event))
+                .accessibilityHint("Opens this event in Calendar")
+            }
+            NookWidgetRow(prefs: prefs, board: board)
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 8)
+        .padding(.bottom, 8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .onAppear { board.nookVisible = state.view == .nook }
+        .onChange(of: state.view) { _, view in
+            board.nookVisible = view == .nook
+        }
+    }
+
+    private func widgetOn(_ id: String) -> Bool {
+        prefs.widgets.contains { $0.id == id && $0.enabled }
+    }
+
+    private func eventLine(_ event: NookEventFact) -> String {
+        let when = event.isAllDay ? "All day" : event.start.formatted(date: .omitted, time: .shortened)
+        return "\(when) \(event.title)"
+    }
+
+    private func noticeStrip(title: String, action: String, press: @escaping () -> Void) -> some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            Button(action, action: press)
+                .buttonStyle(.plain)
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+        }
+        .foregroundStyle(.white)
     }
 }
 
@@ -74,6 +123,7 @@ struct NotchMediaShelf: View {
 
 struct LiveActivityPill: View {
     let headline: NookHeadline
+    @ObservedObject private var prefs = NookPreferences.shared
 
     /// The tray keeps its icon and shows the count. Other lines keep their sentence.
     private var shown: String {
@@ -81,6 +131,21 @@ struct LiveActivityPill: View {
     }
 
     var body: some View {
+        Group {
+            if headline.id == "update" {
+                Button { NookBoard.shared.openReleasePage() } label: { row }
+                    .buttonStyle(.plain)
+                    .disabled(!prefs.interactiveActivities)
+                    .help("Opens the release page.")
+            } else {
+                row
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(headline.text)
+    }
+
+    private var row: some View {
         HStack(spacing: 4) {
             Image(systemName: headline.symbol)
             Text(shown)
@@ -88,8 +153,6 @@ struct LiveActivityPill: View {
         }
         .font(.system(size: 12, weight: .semibold, design: .rounded))
         .foregroundStyle(Color(hex: "#F5F6F8"))
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(headline.text)
     }
 }
 
@@ -102,8 +165,9 @@ private struct NookWidgetRow: View {
     var body: some View {
         let shown = prefs.widgets.filter(\.enabled)
         let pad = CGFloat(prefs.contentPadding)
+        let live = NookLayout.mediaIsLive(title: board.mediaTitle)
         let widths = shown.map {
-            NookLayout.columnWidth(id: $0.id, cells: $0.cells, contentPadding: pad)
+            NookLayout.columnWidth(id: $0.id, cells: $0.cells, contentPadding: pad, mediaLive: live)
         }
         Group {
             if shown.isEmpty {
@@ -125,6 +189,7 @@ private struct NookWidgetRow: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .animation(.spring(response: 0.45, dampingFraction: 0.86), value: live)
             }
         }
     }
@@ -148,10 +213,7 @@ private struct NookWidgetRow: View {
         case "timer":
             NookTimerColumn(board: board).padding(pad)
         case "quickApps":
-            Text("Coming soon")
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.55))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            NookQuickAppsColumn(board: board).padding(pad)
         default:
             EmptyView()
         }
@@ -176,20 +238,44 @@ private struct NookMediaColumn: View {
 
     private var idle: some View {
         VStack(spacing: 8) {
-            Text("No app seems to be running")
-                .font(.system(size: 13, weight: .medium, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.92))
-                .lineLimit(1)
-            Text("Wanna open one?")
-                .font(.system(size: 16, weight: .bold, design: .rounded))
-                .foregroundStyle(.white)
-                .lineLimit(1)
+            if let last = board.lastTrack, NookLayout.resume(last) != nil {
+                Text(last.title)
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                if !last.artist.isEmpty {
+                    Text(last.artist)
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color(hex: "#A7ABB3"))
+                        .lineLimit(1)
+                }
+                Button {
+                    board.resumeLast()
+                } label: {
+                    Label("Play", systemImage: "play.fill")
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
+                .disabled(!prefs.interactiveActivities)
+                .help("Plays the last song")
+                .accessibilityLabel("Play")
+            } else {
+                Text("No app seems to be running")
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.92))
+                    .lineLimit(1)
+                Text("Wanna open one?")
+                    .font(.system(size: 16, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+            }
             HStack(spacing: 14) {
                 ForEach(NookMediaPlatform.launcher, id: \.self) { platform in
                     Button {
                         board.openApp(platform.title)
                     } label: {
-                        NookPlatformGlyph(platform: platform, side: 42)
+                        NookPlatformGlyph(platform: platform, side: 36)
                     }
                     .buttonStyle(.plain)
                     .help(platform.title)
@@ -457,14 +543,23 @@ private struct NookCalendarColumn: View {
     @ObservedObject var board: NookBoard
     @ObservedObject var prefs: NookPreferences
     @State private var selected = Calendar.current.startOfDay(for: Date())
+    @State private var choseDay = false
+
+    private var compact: Bool { NookLayout.mediaIsLive(title: board.mediaTitle) }
 
     var body: some View {
         let days = weekDays
+        let items = events(on: selected)
+        let lead = NookLayout.leadEvent(
+            items,
+            now: Date(),
+            upcomingOnly: Calendar.current.isDateInToday(selected)
+        )
         VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .center, spacing: 8) {
+            if !compact {
                 Text(monthLabel)
-                    .font(.system(size: 28, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.7))
                     .lineLimit(1)
                 HStack(spacing: 2) {
                     ForEach(days, id: \.self) { day in
@@ -472,11 +567,17 @@ private struct NookCalendarColumn: View {
                     }
                 }
             }
-            Spacer(minLength: 0)
-            eventsBlock
+            eventsBlock(items: items, lead: lead)
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onAppear { followSoonEvent() }
+        .onChange(of: board.lampEventDay) { _, _ in followSoonEvent() }
+    }
+
+    private func followSoonEvent() {
+        guard !choseDay, let day = board.lampEventDay else { return }
+        selected = day
     }
 
     private var weekDays: [Date] {
@@ -499,6 +600,7 @@ private struct NookCalendarColumn: View {
             ? calendar.shortWeekdaySymbols[calendar.component(.weekday, from: day) - 1].uppercased()
             : String(calendar.veryShortWeekdaySymbols[calendar.component(.weekday, from: day) - 1].prefix(1))
         return Button {
+            choseDay = true
             selected = calendar.startOfDay(for: day)
         } label: {
             VStack(spacing: 2) {
@@ -524,14 +626,13 @@ private struct NookCalendarColumn: View {
     }
 
     @ViewBuilder
-    private var eventsBlock: some View {
-        let items = events(on: selected)
+    private func eventsBlock(items: [NookEventFact], lead: NookEventFact?) -> some View {
         if board.calendarDenied {
             Text("Calendar access is off. Turn it on in System Settings to show events.")
                 .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(Color.white.opacity(0.55))
                 .frame(maxWidth: .infinity)
-        } else if items.isEmpty {
+        } else if lead == nil && (items.isEmpty || compact) {
             VStack(spacing: 4) {
                 Image(systemName: "calendar")
                     .font(.system(size: 14, weight: .semibold))
@@ -541,22 +642,59 @@ private struct NookCalendarColumn: View {
             .foregroundStyle(Color.white.opacity(0.45))
             .frame(maxWidth: .infinity)
         } else {
-            VStack(alignment: .leading, spacing: 4) {
-                ForEach(Array(items.prefix(4).enumerated()), id: \.offset) { _, event in
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(event.isAllDay ? "All day" : timeLabel(event.start))
-                            .font(.system(size: 11, weight: .semibold, design: .rounded))
-                            .foregroundStyle(Color(hex: "#4C8DFF"))
-                            .frame(width: 58, alignment: .leading)
-                        Text(event.title)
-                            .font(.system(size: 12, weight: .medium, design: .rounded))
-                            .foregroundStyle(.white)
-                            .lineLimit(1)
+            VStack(alignment: .leading, spacing: 6) {
+                if let lead {
+                    eventButton(lead, prominent: true)
+                } else if !items.isEmpty {
+                    Text(emptyCaption)
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.white.opacity(0.45))
+                }
+                if !compact {
+                    let rest = lead.map { lead in items.filter { $0 != lead } } ?? items
+                    ForEach(Array(rest.prefix(3).enumerated()), id: \.offset) { _, event in
+                        eventButton(event, prominent: false)
                     }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    private func eventButton(_ event: NookEventFact, prominent: Bool) -> some View {
+        Button {
+            board.openCalendarEvent(event)
+        } label: {
+            if prominent {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(event.isAllDay ? "All day" : timeLabel(event.start))
+                        .font(.system(size: 22, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                    Text(event.title)
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .lineLimit(2)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(event.isAllDay ? "All day" : timeLabel(event.start))
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color(hex: "#4C8DFF"))
+                        .frame(width: 58, alignment: .leading)
+                    Text(event.title)
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(!prefs.interactiveActivities)
+        .help("Opens this event in Calendar")
+        .accessibilityLabel("\(event.isAllDay ? "All day" : timeLabel(event.start)) \(event.title)")
+        .accessibilityHint("Opens this event in Calendar")
     }
 
     private var emptyCaption: String {
@@ -924,12 +1062,150 @@ private struct NookNotesColumn: View {
             Label("Notes", systemImage: "note.text")
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
                 .foregroundStyle(Color.white.opacity(0.7))
-            TextEditor(text: $board.noteText)
-                .font(.system(size: 13, weight: .medium, design: .rounded))
-                .scrollContentBackground(.hidden)
-                .foregroundStyle(Color(hex: "#F5F6F8"))
-                .onChange(of: board.noteText) { _, _ in board.saveNote() }
+            Text(hint)
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.78))
+                .fixedSize(horizontal: false, vertical: true)
+            noteMenus
+            ZStack(alignment: .topLeading) {
+                NookNoteEditor(board: board)
+                if board.noteText.isEmpty {
+                    Text("Write a note")
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.white.opacity(0.55))
+                        .padding(.top, 2)
+                        .allowsHitTesting(false)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var hint: String {
+        if board.noteMode == .code {
+            return "Code colors a heading, emphasis, inline code, and comments in this note."
+        }
+        return "Rich text is the default. Bold, italic, and underline apply to the selected words."
+    }
+
+    /// Menus stack so the words fit the 120-point notes column.
+    private var noteMenus: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Menu {
+                Button("Rich text") { board.setNoteMode(.rich) }
+                Button("Code") { board.setNoteMode(.code) }
+            } label: {
+                Text(board.noteMode == .rich ? "Rich text" : "Code")
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.9))
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Menu {
+                Button("Bold") { board.toggleNoteBold() }
+                Button("Italic") { board.toggleNoteItalic() }
+                Button("Underline") { board.toggleNoteUnderline() }
+            } label: {
+                Text("Format")
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.9))
+            }
+            .disabled(board.noteMode == .code)
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Menu {
+                Button("Plain text") { board.exportNote(.plain) }
+                Button("Rich text") { board.exportNote(.richText) }
+                Button("Markdown") { board.exportNote(.markdown) }
+            } label: {
+                Text("Export")
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.9))
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+/// The note field. Rich text keeps fonts. Code colors the same words.
+private struct NookNoteEditor: NSViewRepresentable {
+    @ObservedObject var board: NookBoard
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSScrollView()
+        scroll.drawsBackground = false
+        scroll.borderType = .noBorder
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.scrollerStyle = .overlay
+
+        let view = NookNoteNSTextView()
+        view.delegate = context.coordinator
+        view.drawsBackground = false
+        view.isRichText = true
+        view.allowsUndo = true
+        view.importsGraphics = false
+        view.isAutomaticQuoteSubstitutionEnabled = false
+        view.isAutomaticDashSubstitutionEnabled = false
+        view.isAutomaticDataDetectionEnabled = false
+        view.isAutomaticLinkDetectionEnabled = false
+        view.isAutomaticTextReplacementEnabled = false
+        view.isAutomaticSpellingCorrectionEnabled = false
+        view.insertionPointColor = .white
+        view.textContainerInset = NSSize(width: 0, height: 2)
+        view.isVerticallyResizable = true
+        view.isHorizontallyResizable = false
+        view.autoresizingMask = [.width]
+        view.textContainer?.widthTracksTextView = true
+        view.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
+        view.minSize = NSSize(width: 0, height: 0)
+        view.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        scroll.documentView = view
+        return scroll
+    }
+
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        guard let view = scroll.documentView as? NookNoteNSTextView else { return }
+        MainActor.assumeIsolated { board.renderNote(in: view) }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        func textDidChange(_ notification: Notification) {
+            MainActor.assumeIsolated {
+                guard let view = notification.object as? NookNoteNSTextView else { return }
+                NookBoard.shared.noteEdited(in: view)
+            }
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            MainActor.assumeIsolated {
+                guard let view = notification.object as? NSTextView else { return }
+                NookBoard.shared.noteSelectionChanged(in: view)
+            }
+        }
+    }
+}
+
+final class NookNoteNSTextView: NSTextView {
+    var suppressChange = false
+    var renderedMode: NookNoteMode?
+    var renderedRTF = Data()
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.makeKey()
+        window?.makeFirstResponder(self)
+        super.mouseDown(with: event)
     }
 }
 
@@ -938,10 +1214,12 @@ private struct NookTodosColumn: View {
     @State private var draft = ""
 
     var body: some View {
+        let left = board.todos.filter { !$0.done }.count
         VStack(alignment: .leading, spacing: 6) {
-            Label("To-dos", systemImage: "checklist")
+            Label(NookLayout.todosHeading(left: left), systemImage: "checklist")
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
                 .foregroundStyle(Color.white.opacity(0.7))
+                .accessibilityLabel(NookLayout.todosHeading(left: left))
             HStack(spacing: 6) {
                 TextField("Add a to-do", text: $draft)
                     .textFieldStyle(.plain)
@@ -955,21 +1233,25 @@ private struct NookTodosColumn: View {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(board.todos) { item in
                         Button {
-                            board.toggleTodo(item.id)
+                            board.finishTodo(item.id)
                         } label: {
                             HStack(spacing: 6) {
                                 Image(systemName: item.done ? "checkmark.circle.fill" : "circle")
                                 Text(item.title)
                                     .lineLimit(1)
-                                    .strikethrough(item.done)
                                 Spacer(minLength: 0)
                             }
                             .font(.system(size: 12, weight: .medium, design: .rounded))
                             .foregroundStyle(.white)
+                            .opacity(item.done ? 0 : 1)
                         }
                         .buttonStyle(.plain)
+                        .disabled(item.done)
+                        .accessibilityLabel(item.title)
+                        .accessibilityHint("Checks this to-do and removes it")
                     }
                 }
+                .animation(.easeOut(duration: 0.28), value: board.todos.map(\.done))
             }
         }
     }
@@ -1023,25 +1305,56 @@ private struct NookTimerColumn: View {
 
 private struct NookShortcutsColumn: View {
     @ObservedObject var board: NookBoard
+    @ObservedObject private var prefs = NookPreferences.shared
 
     var body: some View {
+        let shown = NookShortcuts.shown(catalog: board.shortcutCatalog, picks: prefs.shortcutPicks)
         VStack(alignment: .leading, spacing: 6) {
             Label("Shortcuts", systemImage: "sparkles")
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
                 .foregroundStyle(Color.white.opacity(0.7))
-            if board.shortcutNames.isEmpty {
-                Text("No shortcuts yet.")
+            Text("None are on until you choose them in settings.")
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.78))
+                .fixedSize(horizontal: false, vertical: true)
+            if !board.shortcutNote.isEmpty {
+                Text(board.shortcutNote)
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.78))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if shown.isEmpty {
+                Text("Choose your shortcuts in settings.")
                     .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.55))
-                    .lineLimit(1)
+                    .foregroundStyle(Color.white.opacity(0.78))
+                    .fixedSize(horizontal: false, vertical: true)
             } else {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(board.shortcutNames.prefix(12), id: \.self) { name in
-                            Button(name) { board.runShortcut(name) }
-                                .buttonStyle(.plain)
-                                .font(.system(size: 12, weight: .medium, design: .rounded))
-                                .lineLimit(1)
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(NookShortcuts.sections(shown)) { section in
+                            if let title = section.title {
+                                Text(title)
+                                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(Color.white.opacity(0.78))
+                            }
+                            LazyVGrid(
+                                columns: [
+                                    GridItem(.flexible(), alignment: .leading),
+                                    GridItem(.flexible(), alignment: .leading)
+                                ],
+                                alignment: .leading,
+                                spacing: 6
+                            ) {
+                                ForEach(section.shortcuts) { shortcut in
+                                    Button(shortcut.name) { board.runShortcut(shortcut) }
+                                        .buttonStyle(.plain)
+                                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                        .multilineTextAlignment(.leading)
+                                        .lineLimit(2)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .disabled(board.shortcutNote == NookShortcuts.runningNote(shortcut.name))
+                                }
+                            }
                         }
                     }
                 }
@@ -1059,6 +1372,93 @@ private struct AirDropTileFrameKey: PreferenceKey {
     static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
         let next = nextValue()
         if next.width > 1 { value = next }
+    }
+}
+
+private struct NookQuickAppsColumn: View {
+    @ObservedObject var board: NookBoard
+    @ObservedObject private var prefs = NookPreferences.shared
+
+    var body: some View {
+        let shown = NookQuickApps.ordered(
+            catalog: board.quickAppCatalog,
+            picks: prefs.quickAppPicks,
+            lastBundleID: board.lastQuickAppID
+        )
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Quick Apps", systemImage: "square.grid.2x2")
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.7))
+            Text("None are on until you choose them in settings.")
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.78))
+                .fixedSize(horizontal: false, vertical: true)
+            if !board.quickAppNote.isEmpty {
+                Text(board.quickAppNote)
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.78))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if shown.isEmpty {
+                Text("Choose your apps in settings.")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.78))
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        if let first = shown.first {
+                            quickAppButton(first, side: 44, showsName: true)
+                        }
+                        let rest = Array(shown.dropFirst())
+                        if !rest.isEmpty {
+                            LazyVGrid(
+                                columns: [
+                                    GridItem(.flexible(), alignment: .leading),
+                                    GridItem(.flexible(), alignment: .leading)
+                                ],
+                                alignment: .leading,
+                                spacing: 6
+                            ) {
+                                ForEach(rest) { app in
+                                    quickAppButton(app, side: 22, showsName: false)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(.white)
+    }
+
+    private func quickAppButton(_ app: NookQuickApp, side: CGFloat, showsName: Bool) -> some View {
+        Button {
+            board.openQuickApp(app)
+        } label: {
+            VStack(spacing: 4) {
+                Image(nsImage: icon(for: app))
+                    .resizable()
+                    .frame(width: side, height: side)
+                if showsName {
+                    Text(app.name)
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(app.name)
+    }
+
+    private func icon(for app: NookQuickApp) -> NSImage {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: app.bundleID) else {
+            return NSWorkspace.shared.icon(for: .application)
+        }
+        return NSWorkspace.shared.icon(forFile: url.path)
     }
 }
 
@@ -1699,38 +2099,24 @@ enum BrowserPictureInPicture {
                 windowID(left: $0.left, top: $0.top, right: $0.right, bottom: $0.bottom)
             }
             let onScreen = browserID.map { isOnScreen($0) } ?? false
-            if NookPictureInPicture.place(step: .showExisting, browserOnThisDesktop: onScreen, pictureOnThisDesktop: pictureUp) == .mirrorHere {
-                guard let choice else { return .failed }
-                if let picture = NookPictureInPicture.offscreenPicture(
-                    among: listedWindows(), browserWidth: width, browserHeight: height
-                ) {
-                    let crop = NookPictureInPicture.pictureCrop(width: picture.width, height: picture.height)
-                    return .mirror(windowID: picture.id, left: crop.left, top: crop.top, right: crop.right, bottom: crop.bottom)
-                }
-                guard let browserID else { return .failed }
-                return mirrorOutcome(browserID: browserID, choice: choice)
+            switch NookPictureInPicture.place(step: .showExisting, browserOnThisDesktop: onScreen, pictureOnThisDesktop: pictureUp) {
+            case .bringHere:
+                return bringPicture(browserWidth: width, browserHeight: height) ? .entered : .failed
+            case .raiseHere:
+                raisePicture(browserWidth: width, browserHeight: height)
+                return pictureUp ? .entered : .failed
+            default:
+                return .failed
             }
-            raisePicture(browserWidth: width, browserHeight: height)
-            return pictureUp ? .entered : .failed
         case .enterWithoutLeaving:
             guard let choice else { return .failed }
             let browserID = windowID(left: choice.left, top: choice.top, right: choice.right, bottom: choice.bottom)
             let onScreen = browserID.map { isOnScreen($0) } ?? false
-            if NookPictureInPicture.route(browserOnThisDesktop: onScreen) == .mirrorHere {
-                guard let browserID else { return .failed }
-                return mirrorOutcome(browserID: browserID, choice: choice)
-            }
-            return enterWithoutLeaving(application: application, choice: choice)
+            let ready = NookPictureInPicture.route(browserOnThisDesktop: onScreen) == .showThenEnter
+                ? shownChoice(application: application, choice: choice)
+                : choice
+            return enterWithoutLeaving(application: application, choice: ready)
         }
-    }
-
-    private static func mirrorOutcome(browserID: UInt32, choice: Choice) -> NookPictureInPictureOutcome {
-        let width = choice.right - choice.left
-        let height = choice.bottom - choice.top
-        let crop = NookPictureInPicture.mirrorCrop(
-            frame: choice.frame, windowWidth: width, windowHeight: height
-        ) ?? NookPictureInPicture.ScreenRect(left: 0, top: 0, right: max(width, 1), bottom: max(height, 1))
-        return .mirror(windowID: browserID, left: crop.left, top: crop.top, right: crop.right, bottom: crop.bottom)
     }
 
     /// The browser is already on this desktop. Open its picture without switching desktops.
@@ -2006,6 +2392,63 @@ enum BrowserPictureInPicture {
             if frame.state == "play" { return choice }
         }
         return fallback
+    }
+
+    /// The window is on another desktop. Show that tab, then the click can open the browser's own picture.
+    private static func shownChoice(application: String, choice: Choice) -> Choice {
+        _ = run(focusScript(application: application, window: choice.window, tab: choice.tab))
+        let bundle = application == "Safari" ? "com.apple.Safari" : "com.google.Chrome"
+        NSRunningApplication.runningApplications(withBundleIdentifier: bundle).first?
+            .activate(options: [.activateIgnoringOtherApps])
+        Thread.sleep(forTimeInterval: 0.4)
+        let inventory = run(inventoryScript(application: application))
+        return firstVideo(application: application, inventory: inventory) ?? choice
+    }
+
+    /// Moves the browser's own floating picture onto this desktop. The screen is not recorded.
+    private static func bringPicture(browserWidth: Double, browserHeight: Double) -> Bool {
+        guard let picture = NookPictureInPicture.offscreenPicture(
+            among: listedWindows(), browserWidth: browserWidth, browserHeight: browserHeight
+        ) else { return false }
+        guard let spot = pictureSpot(width: picture.width, height: picture.height) else { return false }
+        return movePicture(width: picture.width, height: picture.height, x: spot.x, y: spot.y)
+    }
+
+    private static func pictureSpot(width: Double, height: Double) -> CGPoint? {
+        let read = {
+            guard let screen = NSScreen.main else { return nil as CGPoint? }
+            let visible = screen.visibleFrame
+            return CGPoint(x: visible.midX - width / 2, y: visible.minY + 80)
+        }
+        if Thread.isMainThread { return read() }
+        return DispatchQueue.main.sync(execute: read)
+    }
+
+    private static func movePicture(width: Double, height: Double, x: Double, y: Double) -> Bool {
+        let bundles = ["com.google.Chrome", "com.apple.Safari"]
+        for bundle in bundles {
+            guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundle).first else { continue }
+            let element = AXUIElementCreateApplication(app.processIdentifier)
+            var wins: CFTypeRef?
+            AXUIElementCopyAttributeValue(element, kAXWindowsAttribute as CFString, &wins)
+            let list = wins as? [AXUIElement] ?? []
+            for window in list {
+                var sizeValue: CFTypeRef?
+                AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &sizeValue)
+                var size = CGSize.zero
+                if let sizeValue, CFGetTypeID(sizeValue) == AXValueGetTypeID() {
+                    AXValueGetValue(sizeValue as! AXValue, .cgSize, &size)
+                }
+                guard abs(size.width - width) < 8, abs(size.height - height) < 8 else { continue }
+                var point = CGPoint(x: x, y: y)
+                guard let position = AXValueCreate(.cgPoint, &point) else { return false }
+                if AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, position) == .success {
+                    AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+                    return true
+                }
+            }
+        }
+        return false
     }
 
     /// Return to the app the person was using, on the desktop they were using.

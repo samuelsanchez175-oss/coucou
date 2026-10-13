@@ -198,6 +198,68 @@ enum TerminalBehavior {
         var tty: String
     }
 
+    /// A saved marriage plus the noun that should follow the window.
+    struct CornerClaim: Equatable {
+        var id: String
+        var windowID: Int?
+        var tty: String
+        var lockedName: String
+    }
+
+    /// The one color whose quarter this frame already fills.
+    /// A frame that is not one quarter, or that matches two, is not guessed.
+    static func cornerOwner(bounds: TerminalBounds, quadrants: [String: TerminalBounds], slack: Int = cornerSlack) -> String? {
+        let hits = quadrants.compactMap { id, frame in
+            sameFrame(bounds, frame, slack: slack) ? id : nil
+        }
+        guard hits.count == 1 else { return nil }
+        return hits[0]
+    }
+
+    /// A window that already fills a color's quarter belongs to that color.
+    /// The saved marriage on a different color lets go, and the noun goes with the window.
+    /// A frame that is missing, or that sits in no quarter, stays on the color that opened it.
+    static func marriagesForCorners(
+        slots: [CornerClaim],
+        windows: [ListedWindow],
+        quadrants: [String: TerminalBounds]
+    ) -> [CornerClaim] {
+        var slots = slots
+        var carried: [Int: (tty: String, lockedName: String)] = [:]
+        for index in slots.indices {
+            guard let windowID = slots[index].windowID,
+                  let window = windows.first(where: { $0.id == windowID }),
+                  let bounds = window.bounds,
+                  let owner = cornerOwner(bounds: bounds, quadrants: quadrants),
+                  owner != slots[index].id
+            else { continue }
+            let tty = window.tty.isEmpty ? slots[index].tty : window.tty
+            carried[windowID] = (tty, slots[index].lockedName)
+            slots[index].windowID = nil
+            slots[index].tty = ""
+            slots[index].lockedName = ""
+        }
+        for index in slots.indices where slots[index].windowID == nil {
+            guard let quadrant = quadrants[slots[index].id] else { continue }
+            let taken = Set(slots.compactMap(\.windowID))
+            let corners = windows.compactMap { window -> CornerWindow? in
+                guard let bounds = window.bounds else { return nil }
+                return CornerWindow(id: window.id, bounds: bounds)
+            }
+            guard let adopted = windowInCorner(quadrant: quadrant, windows: corners, taken: taken) else { continue }
+            slots[index].windowID = adopted
+            if let window = windows.first(where: { $0.id == adopted }), !window.tty.isEmpty {
+                slots[index].tty = window.tty
+            } else if let saved = carried[adopted], !saved.tty.isEmpty {
+                slots[index].tty = saved.tty
+            }
+            if slots[index].lockedName.isEmpty, let saved = carried[adopted], !saved.lockedName.isEmpty {
+                slots[index].lockedName = saved.lockedName
+            }
+        }
+        return slots
+    }
+
     /// Hold at least this long to tile. A shorter press only brings the window forward.
     static let tileHold: TimeInterval = 0.45
 
@@ -212,6 +274,12 @@ enum TerminalBehavior {
     /// A short press focuses. A hold tiles that window into its corner.
     static func blobPress(held: TimeInterval) -> BlobPress {
         held >= tileHold ? .tile : .focus
+    }
+
+    /// One press opens one terminal. The notch and the blob both see that press,
+    /// and the second one must not start a tab while the first window is opening.
+    static func startsOneWindow(inFlight: Bool) -> Bool {
+        !inFlight
     }
 
     enum SessionTool: Equatable {
@@ -395,6 +463,12 @@ enum TerminalBehavior {
         return Marriage(windowID: nil, terminated: false)
     }
 
+    /// Listings that skip a window for one tick are not a closed terminal.
+    /// The marriage stays until the window has been gone twice in a row.
+    static func releaseMarriage(terminated: Bool, misses: Int) -> Bool {
+        terminated && misses >= 2
+    }
+
     /// Free blobs take an unclaimed terminal. An assigned blob keeps its window.
     /// Xcode, Grok, and Claude are taken first, whenever a blob is free.
     /// A plain shell fills a color that is still free, and only while Terminal is
@@ -403,7 +477,8 @@ enum TerminalBehavior {
         slots: [ClaimSlot],
         open: [ListedWindow],
         freeIDs: Set<String>,
-        acceptPlain: Bool
+        acceptPlain: Bool,
+        quadrants: [String: TerminalBounds] = [:]
     ) -> [ClaimSlot] {
         var slots = slots
         claim(toolsOnly: true)
@@ -421,6 +496,11 @@ enum TerminalBehavior {
                     if takenIDs.contains(window.id) { return false }
                     let tty = window.tty.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !tty.isEmpty, takenTTYs.contains(tty) { return false }
+                    if let bounds = window.bounds,
+                       let owner = cornerOwner(bounds: bounds, quadrants: quadrants),
+                       owner != slots[index].id {
+                        return false
+                    }
                     let isTool = sessionTool(title: window.title, process: window.process) != nil
                     return toolsOnly ? isTool : !isTool
                 }) else { continue }
@@ -617,6 +697,28 @@ enum TerminalBehavior {
     struct CollapsedBlobCenters: Equatable {
         var whiteX: CGFloat
         var facesX: CGFloat
+    }
+
+    /// The closed-notch color under a point in island coordinates.
+    /// The four faces are the 28pt block centered on `(centerX, centerY)`.
+    /// A few points past that block still count: the figure draws larger than its cell,
+    /// and the bottom of purple hangs below the frame.
+    static func collapsedBlobSlot(
+        x: CGFloat,
+        y: CGFloat,
+        centerX: CGFloat,
+        centerY: CGFloat,
+        scale: CGFloat
+    ) -> String? {
+        guard scale > 0.05 else { return nil }
+        let side = compactSide * scale
+        let pad = 6 * scale
+        let localX = x - (centerX - side / 2)
+        let localY = y - (centerY - side / 2)
+        guard localX >= -pad, localY >= -pad, localX < side + pad, localY < side + pad else { return nil }
+        let column = localX < side / 2 ? 0 : 1
+        let row = localY < side / 2 ? 0 : 1
+        return [["green", "orange"], ["purple", "red"]][row][column]
     }
 
     /// Centers of the white blob and the four-blob grid, in a closed island.
@@ -843,6 +945,11 @@ enum TerminalBehavior {
         case .working: return "#3D8BFF"
         case .waiting: return "#C084FC"
         }
+    }
+
+    /// The corner light belongs to a connected terminal. An empty blob stays dark.
+    static func showsStatusLight(connected: Bool) -> Bool {
+        connected
     }
 
     /// The status light no longer pulses. Zero keeps every face still.

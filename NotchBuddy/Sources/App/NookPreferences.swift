@@ -62,6 +62,10 @@ final class NookPreferences: ObservableObject {
     @Published var nookEnabled: Bool = true
     @Published var widgetDividers: Bool = true
     @Published var widgets: [NookWidget] = NookPreferences.defaultWidgets
+    /// Identifiers of the shortcuts that appear in the notch. None until chosen.
+    @Published var shortcutPicks: [String] = []
+    /// Bundle identifiers of the apps that appear in the notch. None until chosen.
+    @Published var quickAppPicks: [String] = []
     @Published var enabledCalendarIDs: [String]? = nil
     @Published var showPastEvents: Bool = false
     @Published var showAllDayEvents: Bool = false
@@ -126,6 +130,18 @@ final class NookPreferences: ObservableObject {
     func setActivity(id: String, enabled: Bool) {
         guard let index = activities.firstIndex(where: { $0.id == id }) else { return }
         activities[index].enabled = enabled
+        persist()
+    }
+
+    func setShortcutPicks(_ picks: [String]) {
+        guard shortcutPicks != picks else { return }
+        shortcutPicks = picks
+        persist()
+    }
+
+    func setQuickAppPicks(_ picks: [String]) {
+        guard quickAppPicks != picks else { return }
+        quickAppPicks = picks
         persist()
     }
 
@@ -202,6 +218,8 @@ final class NookPreferences: ObservableObject {
         nookEnabled = SettingsBoard.defaultToggle("nookEnabled") ?? true
         widgetDividers = SettingsBoard.defaultToggle("widgetDividers") ?? true
         widgets = Self.defaultWidgets
+        shortcutPicks = []
+        quickAppPicks = []
         showPastEvents = SettingsBoard.defaultToggle("showPastEvents") ?? false
         showAllDayEvents = SettingsBoard.defaultToggle("showAllDayEvents") ?? false
         showMultiDayEvents = SettingsBoard.defaultToggle("showMultiDayEvents") ?? false
@@ -265,6 +283,14 @@ final class NookPreferences: ObservableObject {
                 merged = Self.defaultWidgets.compactMap { byID[$0.id] }
             }
             widgets = merged
+        }
+        if let data = d.data(forKey: key("shortcutPicks")),
+           let saved = try? JSONDecoder().decode([String].self, from: data) {
+            shortcutPicks = saved
+        }
+        if let data = d.data(forKey: key("quickAppPicks")),
+           let saved = try? JSONDecoder().decode([String].self, from: data) {
+            quickAppPicks = saved
         }
         if d.object(forKey: key("enabledCalendarIDs")) != nil,
            let data = d.data(forKey: key("enabledCalendarIDs")),
@@ -338,6 +364,8 @@ final class NookPreferences: ObservableObject {
         d.set(nookEnabled, forKey: key("nookEnabled"))
         d.set(widgetDividers, forKey: key("widgetDividers"))
         if let data = try? JSONEncoder().encode(widgets) { d.set(data, forKey: key("widgets")) }
+        if let data = try? JSONEncoder().encode(shortcutPicks) { d.set(data, forKey: key("shortcutPicks")) }
+        if let data = try? JSONEncoder().encode(quickAppPicks) { d.set(data, forKey: key("quickAppPicks")) }
         if let ids = enabledCalendarIDs, let data = try? JSONEncoder().encode(ids) {
             d.set(data, forKey: key("enabledCalendarIDs"))
         } else {
@@ -401,7 +429,7 @@ enum NookWidgetInfo {
         }
     }
 
-    static func comingSoon(_ id: String) -> Bool { id == "quickApps" }
+    static func comingSoon(_: String) -> Bool { false }
 }
 
 enum LiveActivityInfo {

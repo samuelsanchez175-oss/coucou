@@ -116,9 +116,9 @@ enum SettingsBoard {
         return ids
     }
 
-    /// Quick Apps stays off. Every other widget takes the switch as it is.
+    /// Every widget takes the switch as it is. Quick Apps stays off until it is turned on.
     static func commitWidgetEnabled(id: String, on: Bool) -> Bool {
-        guard id != "quickApps" else { return false }
+        _ = id
         return on
     }
 

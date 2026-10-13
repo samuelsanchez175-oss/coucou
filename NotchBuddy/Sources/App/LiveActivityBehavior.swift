@@ -33,11 +33,58 @@ enum LiveActivityBehavior {
     /// The header gear opens the full settings window on the first tap.
     static func settingsDestination() -> SettingsDestination { .fullWindow }
 
+    struct PublishedRelease: Equatable, Sendable {
+        var version: String
+        var page: String
+    }
+
+    /// Latest published release. The app reads this once, not on every notch tick.
+    static let releaseAPI = "https://api.github.com/repos/Louis-CFM/coucou/releases/latest"
+    static let releasesPage = "https://github.com/Louis-CFM/coucou/releases/latest"
+
     /// A newer offered version is the only New Update signal. The same or an older offer stays quiet.
     static func updateIsAvailable(installed: String, offered: String?) -> Bool {
         guard let offered else { return false }
         return versionParts(offered).lexicographicallyPrecedes(versionParts(installed)) == false
             && versionParts(offered) != versionParts(installed)
+    }
+
+    /// Reads tag_name and html_url. A missing tag, a tag with no number, or a bad body is no offer.
+    static func publishedRelease(json: Data) -> PublishedRelease? {
+        guard let object = try? JSONSerialization.jsonObject(with: json) as? [String: Any],
+              let version = version(fromTag: object["tag_name"] as? String) else { return nil }
+        return PublishedRelease(version: version, page: releasePage(object["html_url"] as? String))
+    }
+
+    /// Drops one leading v. "latest" and a blank tag are not versions.
+    static func version(fromTag tag: String?) -> String? {
+        guard var text = tag?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
+        if let first = text.first, first == "v" || first == "V" {
+            let rest = text.dropFirst()
+            if rest.first?.isNumber == true {
+                text = String(rest)
+            }
+        }
+        guard text.contains(where: { $0.isNumber }) else { return nil }
+        return text
+    }
+
+    static func updateSentence(installed: String, offered: String?, checked: Bool, checking: Bool) -> String {
+        if checking { return "Checking for a newer version." }
+        if !checked { return "Coucou has not checked yet." }
+        guard let offered else { return "Coucou could not check for a newer version." }
+        if updateIsAvailable(installed: installed, offered: offered) {
+            return "Version \(offered) is available."
+        }
+        return "This is the latest version."
+    }
+
+    /// Keeps a GitHub release page for this repo. Anything else uses the published releases page.
+    private static func releasePage(_ raw: String?) -> String {
+        guard let raw else { return releasesPage }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("https://github.com/Louis-CFM/coucou/") else { return releasesPage }
+        return trimmed
     }
 
     private static func versionParts(_ value: String) -> [Int] {

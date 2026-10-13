@@ -8,10 +8,11 @@ enum LiveActivityTests {
         testEachActivityCanLead()
         testPausedMediaDoesNotLead()
         testUpdateAppearsOnlyForANewerOffer()
+        testReleaseTagBecomesTheUpdateOffer()
         testChargeLineShowsTheSpeed()
         testChargeSpeedWearsAColor()
         testSettingsKeepsTheMatchingNotchOpen()
-        print("Live activities: 8 cases passed")
+        print("Live activities: 9 cases passed")
     }
 
     /// The header gear opens the full settings window. It does not stop on the notch page.
@@ -201,6 +202,83 @@ enum LiveActivityTests {
         precondition(LiveActivityBehavior.updateIsAvailable(installed: "0.1.1", offered: "0.1.0") == false)
         precondition(LiveActivityBehavior.updateIsAvailable(installed: "0.1.1", offered: "0.1.2") == true)
         precondition(LiveActivityBehavior.updateIsAvailable(installed: "0.1.1", offered: "0.2") == true)
+    }
+
+    /// A published release tag is the offered version. A bad body stays quiet.
+    static func testReleaseTagBecomesTheUpdateOffer() {
+        let newer = Data("""
+        {"tag_name":"v0.1.2","html_url":"https://github.com/Louis-CFM/coucou/releases/tag/v0.1.2"}
+        """.utf8)
+        let offer = LiveActivityBehavior.publishedRelease(json: newer)
+        precondition(offer?.version == "0.1.2", "the version keeps the numbers after v")
+        precondition(offer?.page == "https://github.com/Louis-CFM/coucou/releases/tag/v0.1.2")
+        precondition(LiveActivityBehavior.updateIsAvailable(installed: "0.1.1", offered: offer?.version) == true)
+
+        let bare = Data(#"{"tag_name":"0.2.0"}"#.utf8)
+        let missingPage = LiveActivityBehavior.publishedRelease(json: bare)
+        precondition(missingPage?.version == "0.2.0")
+        precondition(missingPage?.page == LiveActivityBehavior.releasesPage, "a missing page uses the published releases page")
+
+        let elsewhere = Data(#"{"tag_name":"v9.0.0","html_url":"https://example.com/grab"}"#.utf8)
+        precondition(LiveActivityBehavior.publishedRelease(json: elsewhere)?.page == LiveActivityBehavior.releasesPage)
+
+        precondition(LiveActivityBehavior.publishedRelease(json: Data("not json".utf8)) == nil)
+        precondition(LiveActivityBehavior.publishedRelease(json: Data(#"{"message":"Not Found"}"#.utf8)) == nil)
+        precondition(LiveActivityBehavior.publishedRelease(json: Data(#"{"tag_name":"latest"}"#.utf8)) == nil)
+        precondition(LiveActivityBehavior.version(fromTag: "  V1.4 ") == "1.4")
+        precondition(LiveActivityBehavior.version(fromTag: "v") == nil)
+        precondition(LiveActivityBehavior.version(fromTag: nil) == nil)
+
+        precondition(LiveActivityBehavior.updateSentence(installed: "0.1.1", offered: nil, checked: false, checking: true) == "Checking for a newer version.")
+        precondition(LiveActivityBehavior.updateSentence(installed: "0.1.1", offered: nil, checked: false, checking: false) == "Coucou has not checked yet.")
+        precondition(LiveActivityBehavior.updateSentence(installed: "0.1.1", offered: nil, checked: true, checking: false) == "Coucou could not check for a newer version.")
+        precondition(LiveActivityBehavior.updateSentence(installed: "0.1.1", offered: "0.1.1", checked: true, checking: false) == "This is the latest version.")
+        precondition(LiveActivityBehavior.updateSentence(installed: "0.1.1", offered: "0.1.2", checked: true, checking: false) == "Version 0.1.2 is available.")
+
+        let publish = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookBoard.swift",
+            from: "private func publish()",
+            until: "private func scheduleTrayNotice"
+        )
+        precondition(publish.contains("offered: offeredVersion"), "the live line uses the cached release")
+        precondition(!publish.contains("offered: nil"), "the live line no longer ignores the published release")
+        precondition(!publish.contains("URLSession"), "the two-second tick does not fetch a release")
+        precondition(!publish.contains("releases/latest"), "the two-second tick does not fetch a release")
+
+        let start = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookBoard.swift",
+            from: "func start()",
+            until: "func notePointer"
+        )
+        precondition(start.contains("checkForUpdate()"), "Coucou checks once when it opens")
+
+        let about = sourceSlice(
+            file: "NotchBuddy/Sources/App/CoucouSettingsShell.swift",
+            from: "struct AboutSettingsPane",
+            until: "// MARK: - Rows"
+        )
+        precondition(about.contains("Check for a newer version"))
+        precondition(about.contains("Open the release page"))
+        precondition(about.contains("Looks up the published Coucou release"))
+        precondition(about.contains("size: 11"))
+        precondition(about.contains("updateSentence"))
+
+        let pill = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookIslandView.swift",
+            from: "struct LiveActivityPill",
+            until: "// MARK: - Widget row"
+        )
+        precondition(pill.contains("headline.id == \"update\""), "only the update line opens the release")
+        precondition(pill.contains("openReleasePage"))
+        precondition(pill.contains("trayCollapsedText"))
+        precondition(pill.contains("headline.symbol"))
+
+        let activities = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookPreferences.swift",
+            from: "static let defaultActivities",
+            until: "private func applyDefaults"
+        )
+        precondition(activities.contains("id: \"update\", enabled: true"), "New Update stays available to turn on")
     }
 
     /// Charging shows the battery icon, the percentage, and the watts. The word charging stays off.
