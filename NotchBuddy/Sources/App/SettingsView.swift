@@ -132,8 +132,8 @@ struct SettingsView: View {
                 GroupBox("Grok") {
                     VStack(alignment: .leading, spacing: 8) {
                         Picker("Notch chat uses", selection: $state.chatProvider) {
-                            Text("Claude").tag("claude")
-                            Text("Grok").tag("grok")
+                            Text("Claude").tag(ChatProvider.anthropic)
+                            Text("Grok").tag(ChatProvider.grok)
                         }
 
                         SecureField("API key from console.x.ai", text: $grokKey)

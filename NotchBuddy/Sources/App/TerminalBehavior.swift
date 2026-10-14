@@ -30,14 +30,18 @@ enum TerminalBehavior {
     static var faceGridWidth: CGFloat { faceColumn * 2 + faceColumnGap }
     /// Home page inset, the left card, and the gap before the terminal card.
     static let overviewPageInset: CGFloat = 10
-    static let overviewLeftCard: CGFloat = 322
+    /// Usage card. Wide enough for the model, both clocks, and a refill time
+    /// that clears the next ring. The terminal card still holds the face grid.
+    static let overviewLeftCard: CGFloat = 352
     static let overviewCardGap: CGFloat = 10
 
     /// Width left for the four terminal tiles after the left card.
     static func overviewRightCard(islandWidth: CGFloat) -> CGFloat {
         islandWidth - overviewPageInset * 2 - overviewLeftCard - overviewCardGap
     }
-    static let overviewHeight: CGFloat = 8 + 34 + clusterHeight + 10
+    /// Extra open-drawer height so the home player sits under the usage rows.
+    static let homePlayerDrop: CGFloat = 24
+    static let overviewHeight: CGFloat = 8 + 34 + clusterHeight + 10 + homePlayerDrop
 
     /// Vertical center of the four faces, in the overview's content coordinates.
     /// This still includes the 8pt pad and 34pt header. A notched Mac subtracts
@@ -643,9 +647,9 @@ enum TerminalBehavior {
     /// The four faces in the right-hand card, in island coordinates (origin top-left).
     /// `contentTop` is the top of the page content, under the camera housing.
     static func blobFrames(islandWidth: CGFloat, contentTop: CGFloat, headerInContent: Bool = true) -> [BlobFrame] {
-        let inset: CGFloat = 10
-        let leftCard: CGFloat = 322
-        let gap: CGFloat = 10
+        let inset = overviewPageInset
+        let leftCard = overviewLeftCard
+        let gap = overviewCardGap
         let clusterPadX: CGFloat = 8
         let gridTop = contentTop + (headerInContent ? menuBarHeaderBand : 0) + 6
         let rightX = inset + leftCard + gap

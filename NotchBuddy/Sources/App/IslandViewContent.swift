@@ -27,6 +27,20 @@ struct IslandViewContent: View {
         case .greeting:  EmptyView()  // GreetingCanvasView overlaid in IslandRootView
         case .nook:      NookView(state: state)
         case .tray:      TrayView()
+        case .wardrobe:  WardrobeView(state: state)
+        case .recap:     WeeklyRecapCardView(state: state)
+        case .listening:
+            #if !APPSTORE
+            VoiceListeningView(isActive: state.view == .listening)
+            #else
+            EmptyView()
+            #endif
+        case .voiceResult:
+            #if !APPSTORE
+            VoiceResultView()
+            #else
+            EmptyView()
+            #endif
         }
     }
 }
@@ -36,6 +50,7 @@ struct IslandViewContent: View {
 struct OverviewView: View {
     @ObservedObject var state: AppState
     @State private var showingN8nDetail = false
+    @State private var activeDiffId: Int? = nil
 
     var agent: AgentTask? { state.focusTask }
 
@@ -48,7 +63,9 @@ struct OverviewView: View {
                 // Title row + ticker stacked (or integration card)
                 if let agent = agent {
                     if agent.isIntegration {
-                        IntegrationCardView(task: agent, showingDetail: $showingN8nDetail)
+                        IntegrationCardView(task: agent, showingDetail: $showingN8nDetail, onDiffTap: { diffIdx in
+                            withAnimation(.easeIn(duration: 0.16)) { activeDiffId = diffIdx }
+                        })
                     } else {
                         VStack(alignment: .leading, spacing: 0) {
                             HStack(spacing: 6) {
@@ -84,7 +101,9 @@ struct OverviewView: View {
                             .padding(.leading, 108)
                             .padding(.trailing, 36)
 
-                            TickerView(task: agent)
+                            TickerView(task: agent, onDiffTap: { diffIdx in
+                                withAnimation(.easeIn(duration: 0.16)) { activeDiffId = diffIdx }
+                            })
                                 .frame(height: 44)
                                 .padding(.top, 6)
                                 .padding(.leading, 108)
@@ -95,8 +114,49 @@ struct OverviewView: View {
                     }
                 }
 
+                // Plan detail overlays on top of normal content (GitHub build, home view only)
+                #if !APPSTORE
+                if state.showingPlanDetail {
+                    CardBackground(wash: nil)
+                    Group {
+                        if state.planDetailIsCodex {
+                            CodexPlanCardView(usage: state.codexPlanUsage)
+                        } else {
+                            // Claude and Codex both on: the header shows only the Claude pill,
+                            // Codex is a third row here that opens its own card.
+                            let bothPlans = state.showPlanInNotch && state.planRelayInstalled
+                                && state.showCodexPlanInNotch
+                            ClaudePlanCardView(usage: state.claudePlanUsage,
+                                               codexRow: bothPlans,
+                                               codexUsage: state.codexPlanUsage,
+                                               onCodex: {
+                                                   withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                                                       state.planDetailIsCodex = true
+                                                   }
+                                                   state.refreshCodexPlanUsage()
+                                               })
+                        }
+                    }
+                    .transition(.opacity)
+                }
+                #endif
+
+                // Diff overlay — replaces ticker when a diff step is tapped
+                if let diffId = activeDiffId,
+                   let task = agent,
+                   let diff = state.sessionDiffs[task.id]?.first(where: { $0.id == diffId }) {
+                    CardBackground(wash: nil)
+                    DiffCardView(diff: diff, onDismiss: { activeDiffId = nil })
+                        .transition(.opacity)
+                }
+
                 // ↗ jump button — last in ZStack so it renders on top; hidden while any detail is open
-                if !showingN8nDetail {
+                #if !APPSTORE
+                let hideJumpButton = showingN8nDetail || state.showingPlanDetail || activeDiffId != nil
+                #else
+                let hideJumpButton = showingN8nDetail || activeDiffId != nil
+                #endif
+                if !hideJumpButton {
                     Button(action: { openAgentTarget(agent) }) {
                         Image(systemName: "arrow.up.right")
                             .font(.system(size: 8, weight: .medium))
@@ -110,13 +170,31 @@ struct OverviewView: View {
                     .padding(.trailing, 10)
                     .frame(maxWidth: .infinity, alignment: .trailing)
                 }
+
+                // Model name, then that model's usage rings, under the white blob.
+                #if !APPSTORE
+                let hideMeters = showingN8nDetail || activeDiffId != nil || state.showingPlanDetail
+                #else
+                let hideMeters = showingN8nDetail || activeDiffId != nil
+                #endif
+                if !hideMeters {
+                    UsageRingStack()
+                        .padding(.leading, UsageBehavior.stackLeading)
+                        .padding(.top, UsageBehavior.stackTop)
+                }
             }
-            .frame(width: TerminalBehavior.overviewLeftCard)
+            .frame(width: TerminalBehavior.overviewLeftCard, alignment: .topLeading)
+            .frame(maxHeight: .infinity, alignment: .top)
             .overlay(alignment: .bottom) {
-                if !showingN8nDetail {
+                #if !APPSTORE
+                let hideShelf = showingN8nDetail || activeDiffId != nil || state.showingPlanDetail
+                #else
+                let hideShelf = showingN8nDetail || activeDiffId != nil
+                #endif
+                if !hideShelf {
                     HomeAudioShelf()
-                        .padding(.horizontal, 8)
-                        .padding(.bottom, 8)
+                        .padding(.horizontal, 10)
+                        .padding(.bottom, 6)
                 }
             }
 
@@ -125,13 +203,43 @@ struct OverviewView: View {
                 TerminalClusterView()
             }
         }
-        .onChange(of: state.focusId) { _, _ in showingN8nDetail = false }
+        .onChange(of: state.focusId) { _, new in
+            showingN8nDetail = false
+            activeDiffId = nil
+            #if !APPSTORE
+            withAnimation(.easeIn(duration: 0.16)) { state.showingPlanDetail = false }
+            #endif
+            if new == "integration_github" { GithubPoller.shared.refreshIfStale() }
+        }
+        #if !APPSTORE
+        .onChange(of: state.view) { _, v in
+            if v != .overview { state.showingPlanDetail = false; activeDiffId = nil }
+        }
+        #endif
+        .onChange(of: state.mode) { _, m in
+            #if !APPSTORE
+            if m != .expanded { state.showingPlanDetail = false; activeDiffId = nil }
+            #endif
+            if m == .expanded && state.focusId == "integration_github" {
+                GithubPoller.shared.refreshIfStale()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .islandToggleDiff)) { _ in
+            if let id = activeDiffId {
+                withAnimation(.easeIn(duration: 0.16)) { activeDiffId = nil }
+                _ = id
+            } else if let task = state.focusTask,
+                      let last = state.sessionDiffs[task.id]?.last {
+                withAnimation(.easeIn(duration: 0.16)) { activeDiffId = last.id }
+            }
+        }
     }
 
     private func openAgentTarget(_ task: AgentTask?) {
         guard let task else { return }
         switch task.id {
         case "integration_claude":
+            if ClaudeHost.activate(task.hostApp) { return }
             let vscodeBundleId = "com.microsoft.VSCode"
             if let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == vscodeBundleId }) {
                 app.activate(options: .activateIgnoringOtherApps)
@@ -140,10 +248,22 @@ struct OverviewView: View {
             }
         case "integration_resend":
             NSWorkspace.shared.open(URL(string: "https://resend.com/emails")!)
+        case "integration_mail":
+            #if !APPSTORE
+            MailController.shared.openMail()
+            #endif
+        case "integration_crypto":
+            let exchange = CryptoSettings.exchange
+            if let first = CryptoSettings.coins.first,
+               let url = exchange.tradeURL(exchange.pair(first, CryptoSettings.currency)) {
+                NSWorkspace.shared.open(url)
+            }
+        case "integration_portfolio":
+            break   // no global URL; individual holdings open their exchange pages
         case "integration_vercel":
             NSWorkspace.shared.open(URL(string: "https://vercel.com/dashboard")!)
         case "integration_github":
-            NSWorkspace.shared.open(URL(string: "https://github.com")!)
+            NSWorkspace.shared.open(URL(string: "https://github.com/pulls")!)
         case "integration_n8n":
             if let urlStr = KeychainStore.shared.get("n8n-url"), let url = URL(string: urlStr) {
                 NSWorkspace.shared.open(url)
@@ -154,6 +274,45 @@ struct OverviewView: View {
             NSWorkspace.shared.open(URL(string: "https://notion.so")!)
         case "integration_calcom":
             NSWorkspace.shared.open(URL(string: "https://app.cal.com/bookings")!)
+        case "agent_cursor":
+            #if !APPSTORE
+            if let url = NSWorkspace.shared.urlForApplication(
+                withBundleIdentifier: "com.todesktop.230313mzl4w4u92") {
+                NSWorkspace.shared.openApplication(at: url, configuration: .init(), completionHandler: nil)
+            }
+            #endif
+        case "agent_codex":
+            #if !APPSTORE
+            if let url = NSWorkspace.shared.urlForApplication(
+                withBundleIdentifier: "com.openai.codex") {
+                NSWorkspace.shared.openApplication(at: url, configuration: .init(), completionHandler: nil)
+            }
+            #endif
+        case "agent_claude-desktop":
+            openClaudeDesktopApp()
+        case "agent_gemini", "agent_antigravity",
+             "agent_copilot", "agent_muse", "agent_opencode", "agent_amp":
+            #if !APPSTORE
+            TerminalTarget.activate(sessionBundleId: nil)
+            #endif
+        case "ai_anthropic":
+            switchChatProvider(.anthropic)
+        case "ai_google":
+            switchChatProvider(.google)
+        case "ai_openai":
+            switchChatProvider(.openai)
+        case "ai_ollama":
+            switchChatProvider(.ollama)
+        case "ai_lmstudio":
+            switchChatProvider(.lmstudio)
+        case "integration_music":
+            #if !APPSTORE
+            MusicController.shared.openMusic()
+            #endif
+        case "integration_spotify":
+            #if !APPSTORE
+            SpotifyController.shared.openSpotify()
+            #endif
         default:
             // Non-integration real tasks
             if task.source == .n8n {
@@ -162,84 +321,174 @@ struct OverviewView: View {
                 }
             } else {
                 #if !APPSTORE
-                let terminalBundleIds = ["com.apple.Terminal", "com.googlecode.iterm2",
-                                         "net.kovidgoyal.kitty", "com.mitchellh.ghostty"]
-                if let hit = terminalBundleIds.compactMap({ id in
-                    NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier == id }
-                }).first {
-                    hit.activate(options: .activateIgnoringOtherApps)
-                }
+                TerminalTarget.activate(sessionBundleId: task.sessionBundleId)
                 #endif
             }
         }
     }
 }
 
-/// Thumbnail, title, and transport under the white blob. Hidden until a title exists.
+/// Brand-colored rings under the white blob. Name, then the five-hour ring, then the week ring.
+struct UsageRingStack: View {
+    @ObservedObject private var monitor = UsageMonitor.shared
+
+    private var columns: [String] {
+        UsageBehavior.columnWindows(UsageBehavior.services.flatMap {
+            UsageBehavior.rows(service: $0, levels: monitor.levels($0)).flatMap(\.gates)
+        })
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: UsageBehavior.gap) {
+            header
+            ForEach(UsageBehavior.services, id: \.self) { service in
+                ForEach(UsageBehavior.rows(service: service, levels: monitor.levels(service))) { row in
+                    HStack(spacing: 2) {
+                        Circle().fill(Color(hex: service.brandHex)).frame(width: 6, height: 6)
+                        Text(row.model)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Color(hex: "#F5F6F8"))
+                            .lineLimit(1).minimumScaleFactor(0.8)
+                            .frame(width: UsageBehavior.nameWidth, alignment: .leading)
+                        ForEach(columns, id: \.self) { window in
+                            if let gate = UsageBehavior.placed(row: row, window: window) {
+                                clock(gate, service: service, width: UsageBehavior.columnWidth(gate.window))
+                            } else {
+                                Color.clear.frame(width: UsageBehavior.columnWidth(window), height: UsageBehavior.ring)
+                            }
+                        }
+                    }
+                    .frame(height: UsageBehavior.row)
+                }
+            }
+        }
+        .frame(width: UsageBehavior.stackWidth, alignment: .leading)
+        .onAppear { monitor.start() }
+    }
+
+    private var header: some View {
+        HStack(spacing: 2) {
+            Color.clear.frame(width: 6, height: 6)
+            Color.clear.frame(width: UsageBehavior.nameWidth, height: 1)
+            ForEach(columns, id: \.self) { window in
+                caption(window)
+            }
+        }
+        .frame(height: UsageBehavior.header)
+    }
+
+    /// The words sit over the ring and the percent. The date lane is the padding before the next clock.
+    private func caption(_ window: String) -> some View {
+        let width = UsageBehavior.columnWidth(window)
+        let meter = min(UsageBehavior.meterWidth, width)
+        return HStack(spacing: 0) {
+            Text(window)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(Color(hex: "#A7ABB3"))
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .multilineTextAlignment(.center)
+                .frame(width: meter, alignment: .center)
+                .offset(x: -UsageBehavior.headerNudge, y: -UsageBehavior.headerLift)
+            Color.clear.frame(width: width - meter, height: 1)
+        }
+    }
+
+    private func clock(_ gate: UsageGate, service: UsageService, width: CGFloat) -> some View {
+        let helpText = UsageBehavior.detail(service: service, gate: gate)
+        let meter = min(UsageBehavior.meterWidth, width)
+        return HStack(spacing: 0) {
+            HStack(spacing: 4) {
+                UsageRing(remaining: gate.remaining, color: Color(hex: service.brandHex))
+                Text(UsageBehavior.number(gate.remaining))
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(Color(hex: "#F5F6F8"))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .frame(width: UsageBehavior.percentWidth, alignment: .leading)
+                    .accessibilityHidden(true)
+            }
+            .frame(width: meter, alignment: .center)
+            .help(helpText)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(helpText)
+            refillDate(gate)
+                .frame(width: width - meter, alignment: .leading)
+                .clipped()
+        }
+        .frame(width: width, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func refillDate(_ gate: UsageGate) -> some View {
+        if let when = UsageBehavior.replenishReading(remaining: gate.remaining, at: gate.replenishes) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(when.day)
+                Text(when.time)
+            }
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(Color(hex: "#A7ABB3"))
+            .lineLimit(1)
+            .minimumScaleFactor(0.85)
+            .padding(.leading, UsageBehavior.dateGap)
+            .help("Refills \(when.day), \(when.time)")
+        }
+    }
+}
+
+private struct UsageRing: View {
+    var remaining: Int?
+    var color: Color
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.white.opacity(0.16), lineWidth: 2)
+            Circle()
+                .trim(from: 0, to: UsageBehavior.fraction(remaining))
+                .stroke(color, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+        }
+        .frame(width: UsageBehavior.ring, height: UsageBehavior.ring)
+    }
+}
+
+/// Thumbnail, title, and the current position under the white blob. Hidden until a title exists.
 struct HomeAudioShelf: View {
     @ObservedObject private var board = NookBoard.shared
     @ObservedObject private var prefs = NookPreferences.shared
-    @ObservedObject private var picture = PictureInPictureController.shared
 
     var body: some View {
         if NookPlayback.showsHomeAudio(title: board.mediaTitle) {
-            HStack(alignment: .center, spacing: 8) {
+            HStack(alignment: .center, spacing: 6) {
                 artwork
-                VStack(alignment: .leading, spacing: 2) {
-                    Button {
-                        board.showPlayingSource()
-                    } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(board.mediaTitle ?? "")
-                                .font(.system(size: 12, weight: .bold))
-                                .foregroundStyle(.white)
-                                .lineLimit(2)
-                                .multilineTextAlignment(.leading)
-                            if let artist = board.mediaArtist?.trimmingCharacters(in: .whitespacesAndNewlines), !artist.isEmpty {
-                                Text(artist)
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundStyle(Color(hex: "#A7ABB3"))
-                                    .lineLimit(1)
-                            }
-                        }
+                Button {
+                    board.showPlayingSource()
+                } label: {
+                    Text(board.mediaTitle ?? "")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(board.mediaTitle ?? "Now playing")
-                    .help("Shows where this is playing.")
-                    HStack(spacing: 0) {
-                        control("backward.fill", "Previous") { board.skip(next: false) }
-                        control(
-                            board.mediaIsPlaying ? "pause.fill" : "play.fill",
-                            board.mediaIsPlaying ? "Pause" : "Play"
-                        ) { board.togglePlayback() }
-                        control("forward.fill", "Next") { board.skip(next: true) }
-                        control(
-                            NookPictureInPicture.buttonSymbol(active: picture.active),
-                            NookPictureInPicture.buttonLabel(active: picture.active)
-                        ) {
-                            picture.toggle(
-                                bundleID: board.mediaBundleID,
-                                displayName: board.mediaDisplayName,
-                                hasTitle: NookPlayback.showsHomeAudio(title: board.mediaTitle)
-                            )
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    if board.mediaDuration > 1 {
-                        HStack {
-                            Text(clock(board.mediaPosition))
-                            Spacer(minLength: 4)
-                            Text(clock(board.mediaDuration))
-                        }
-                        .font(.system(size: 10, weight: .medium, design: .rounded))
-                        .monospacedDigit()
-                        .foregroundStyle(Color(hex: "#A7ABB3"))
-                    }
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel(board.mediaTitle ?? "Now playing")
+                .help("Shows where this is playing.")
+                Text(clock(board.mediaPosition))
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(Color(hex: "#A7ABB3"))
+                    .help("Current position")
+                    .accessibilityLabel("Current position \(clock(board.mediaPosition))")
+                control(
+                    board.mediaIsPlaying ? "pause.fill" : "play.fill",
+                    board.mediaIsPlaying ? "Pause" : "Play"
+                ) { board.togglePlayback() }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: 28)
+            .clipped()
         }
     }
 
@@ -273,13 +522,13 @@ struct HomeAudioShelf: View {
                 ZStack {
                     Color.white.opacity(0.08)
                     Image(systemName: "music.note")
-                        .font(.system(size: 16, weight: .bold))
+                        .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(.white)
                 }
             }
         }
-        .frame(width: 64, height: 64)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .frame(width: 22, height: 22)
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         .accessibilityLabel("Now playing")
     }
 }
@@ -318,21 +567,46 @@ struct ApprovalView: View {
 
     var approval: ApprovalInfo? { state.pendingApproval }
 
+    /// The pill, named after the session that asks (several sessions can share a pill).
+    private var asker: AgentTask? {
+        guard var task = state.focusTask else { return nil }
+        if let project = approval?.projectName, !project.isEmpty { task.name = project }
+        return task
+    }
+
     var body: some View {
+        // Captured when the card is drawn: a click answers the request that was on screen,
+        // and is ignored if the card has moved on to the next one since.
+        let shownId = approval?.id
         ZStack {
             CardBackground(wash: .amber)
             VStack(alignment: .leading, spacing: 5) {
-                AgentWho(task: state.focusTask, label: "needs permission")
+                HStack(spacing: 7) {
+                    AgentWho(task: asker, label: "needs permission")
+                    // Other requests waiting behind this one: "1/3".
+                    if let count = approval?.queueCount, count > 1 {
+                        Text(verbatim: "1/\(count)")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(Color(hex: "#8E939C"))
+                            .monospacedDigit()
+                    }
+                }
                 CodeBlock(text: approval?.command ?? approval?.tool ?? "…")
                 HStack(spacing: 8) {
                     SecondaryButton("Deny") {
-                        HookServer.shared.sendApprovalDecision("deny")
+                        HookServer.shared.sendApprovalDecision("deny", for: shownId)
                     }
                     PrimaryButton("Allow") {
-                        HookServer.shared.sendApprovalDecision("allow")
+                        HookServer.shared.sendApprovalDecision("allow", for: shownId)
                     }
-                    SecondaryButton("Always") {
-                        HookServer.shared.sendApprovalDecision("always")
+                    // Codex, Copilot CLI and Muse Code do not support updatedPermissions
+                    let hideAlways = approval?.pillId == "agent_codex"
+                        || approval?.pillId == "agent_copilot"
+                        || approval?.pillId == "agent_muse"
+                    if !hideAlways {
+                        SecondaryButton("Always") {
+                            HookServer.shared.sendApprovalDecision("always", for: shownId)
+                        }
                     }
                 }
             }
@@ -348,25 +622,221 @@ struct ApprovalView: View {
 
 struct QuestionView: View {
     @ObservedObject var state: AppState
+    @State private var questionIndex = 0
+    // Per-question selected labels (empty = none chosen yet)
+    @State private var selections: [[String]] = []
+    // Per-question custom "Other…" text
+    @State private var otherTexts: [String] = []
+    // Per-question "Other…" mode active
+    @State private var showOther: [Bool] = []
+    @FocusState private var otherFieldFocused: Bool
+
+    var question: AskQuestion? { state.pendingQuestion }
 
     var body: some View {
         ZStack {
             CardBackground(wash: .cyan)
-            VStack(alignment: .leading, spacing: 5) {
-                AgentWho(task: state.focusTask, label: "Claude Code is asking a question")
-                Text("Which search engine to use?")
-                    .font(.system(size: 15, weight: .semibold))
-                HStack(spacing: 8) {
-                    ForEach(["Postgres full-text", "Meilisearch", "Algolia"], id: \.self) { opt in
-                        SecondaryButton(opt) { /* answer */ }
+            if let q = question, !q.questions.isEmpty {
+                let qi = min(questionIndex, q.questions.count - 1)
+                let item = q.questions[qi]
+                let isLast = qi == q.questions.count - 1
+                let isMulti = item.multiSelect
+                let curSel = qi < selections.count ? selections[qi] : []
+                let curOther = qi < showOther.count ? showOther[qi] : false
+                let curOtherText = qi < otherTexts.count ? otherTexts[qi] : ""
+                let canProceed = !curSel.isEmpty || (curOther && !curOtherText.isEmpty)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    // Header row: agent name + question counter + "Reply in terminal" link
+                    HStack(spacing: 4) {
+                        AgentWho(task: nil, label: "Claude Code is asking")
+                        Spacer(minLength: 4)
+                        if q.questions.count > 1 {
+                            Text("\(qi + 1)/\(q.questions.count)")
+                                .font(.system(size: 10))
+                                .foregroundColor(Color(hex: "#6B7079"))
+                        }
+                        Button("Reply in terminal") { HookServer.shared.sendQuestionAsk() }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 10))
+                            .foregroundColor(Color(hex: "#6B7079"))
+                            .underline()
+                    }
+                    // Optional short header label above question text
+                    if !item.header.isEmpty {
+                        Text(item.header)
+                            .font(.system(size: 10))
+                            .foregroundColor(Color(hex: "#6B7079"))
+                    }
+                    Text(item.question)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(Color(hex: "#F5F6F8"))
+                        .fixedSize(horizontal: false, vertical: true)
+                    // Options (wrapping) or "Other…" compact inline row
+                    if curOther {
+                        HStack(spacing: 6) {
+                            TextField("Your answer…", text: Binding(
+                                get: { qi < otherTexts.count ? otherTexts[qi] : "" },
+                                set: { v in if qi < otherTexts.count { otherTexts[qi] = v } }
+                            ))
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 12))
+                            .foregroundColor(Color(hex: "#F5F6F8"))
+                            .focused($otherFieldFocused)
+                            .onAppear { otherFieldFocused = true }
+                            .onSubmit { commitOtherAndProceed(q: q, qi: qi, isLast: isLast) }
+                            .onExitCommand { if qi < showOther.count { showOther[qi] = false } }
+                            .padding(.horizontal, 8).padding(.vertical, 5)
+                            .background(Color.white.opacity(0.07))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            Button(isLast ? "Send" : "Next") {
+                                commitOtherAndProceed(q: q, qi: qi, isLast: isLast)
+                            }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(curOtherText.isEmpty ? Color(hex: "#6B7079") : Color(hex: "#F5F6F8"))
+                            .padding(.horizontal, 8).padding(.vertical, 5)
+                            .background(Color.white.opacity(curOtherText.isEmpty ? 0.05 : 0.15))
+                            .clipShape(Capsule())
+                            .disabled(curOtherText.isEmpty)
+                            Button { if qi < showOther.count { showOther[qi] = false } } label: {
+                                Text("✕").font(.system(size: 9))
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundColor(Color(hex: "#6B7079"))
+                        }
+                    } else if item.hasDescriptions {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(Array(item.options.enumerated()), id: \.offset) { idx, opt in
+                                let isSelected = curSel.contains(opt.label)
+                                Button {
+                                    if isMulti {
+                                        toggleSelection(qi: qi, label: opt.label)
+                                    } else {
+                                        selectAndProceed(q: q, qi: qi, label: opt.label, isLast: isLast)
+                                    }
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(opt.label)
+                                            .font(.system(size: 12, weight: .medium))
+                                            .foregroundColor(isSelected ? Color(hex: "#67E8F9") : Color(hex: "#F5F6F8"))
+                                        if !opt.description.isEmpty {
+                                            Text(opt.description)
+                                                .font(.system(size: 11))
+                                                .foregroundColor(Color(hex: "#9AA0A8"))
+                                                .multilineTextAlignment(.leading)
+                                                .fixedSize(horizontal: false, vertical: true)
+                                        }
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, 10).padding(.vertical, 6)
+                                    .background(isSelected ? Color(hex: "#22D3EE").opacity(0.22) : Color.white.opacity(0.07))
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(isSelected ? Color(hex: "#22D3EE").opacity(0.55) : Color.white.opacity(0.1), lineWidth: 1))
+                                }
+                                .buttonStyle(.plain)
+                                .keyboardShortcut(KeyEquivalent(Character(String(idx + 1))), modifiers: [])
+                            }
+                            SecondaryButton("Other…") {
+                                if qi < showOther.count { showOther[qi] = true }
+                            }
+                        }
+                    } else {
+                        ChipFlowLayout(spacing: 6) {
+                            ForEach(Array(item.options.enumerated()), id: \.offset) { idx, opt in
+                                let isSelected = curSel.contains(opt.label)
+                                if isMulti {
+                                    Button {
+                                        toggleSelection(qi: qi, label: opt.label)
+                                    } label: {
+                                        Text(opt.label)
+                                            .font(.system(size: 12, weight: .medium))
+                                            .padding(.horizontal, 8).padding(.vertical, 4)
+                                            .background(isSelected ? Color(hex: "#22D3EE").opacity(0.22) : Color.white.opacity(0.07))
+                                            .foregroundColor(isSelected ? Color(hex: "#67E8F9") : Color(hex: "#C5C8CD"))
+                                            .clipShape(RoundedRectangle(cornerRadius: 7))
+                                            .overlay(RoundedRectangle(cornerRadius: 7).stroke(isSelected ? Color(hex: "#22D3EE").opacity(0.55) : Color.white.opacity(0.1), lineWidth: 1))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .keyboardShortcut(KeyEquivalent(Character(String(idx + 1))), modifiers: [])
+                                } else {
+                                    SecondaryButton(verbatim: opt.label) {
+                                        selectAndProceed(q: q, qi: qi, label: opt.label, isLast: isLast)
+                                    }
+                                    .keyboardShortcut(KeyEquivalent(Character(String(idx + 1))), modifiers: [])
+                                }
+                            }
+                            // "Other…" implicit free-text option
+                            SecondaryButton("Other…") {
+                                if qi < showOther.count { showOther[qi] = true }
+                            }
+                        }
+                    }
+                    // Send/Next — only for multi-select (and not while "Other…" field is open)
+                    if isMulti && !curOther {
+                        PrimaryButton(isLast ? "Send" : "Next") {
+                            proceedFromQuestion(q: q, qi: qi, isLast: isLast)
+                        }
+                        .disabled(!canProceed)
+                        .opacity(canProceed ? 1 : 0.4)
                     }
                 }
+                .padding(.leading, 116)
+                .padding(.trailing, 16)
+                .padding(.vertical, 4)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.leading, 116)
-            .padding(.trailing, 16)
-            .padding(.vertical, 4)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .onAppear { resetQuestionState() }
+        .onChange(of: state.pendingQuestion) { _, _ in resetQuestionState() }
+        .onDisappear { HookServer.shared.releaseQuestionFD() }
+    }
+
+    private func resetQuestionState() {
+        questionIndex = 0
+        let count = state.pendingQuestion?.questions.count ?? 0
+        selections = Array(repeating: [], count: count)
+        otherTexts = Array(repeating: "", count: count)
+        showOther  = Array(repeating: false, count: count)
+    }
+
+    private func toggleSelection(qi: Int, label: String) {
+        guard qi < selections.count else { return }
+        if let i = selections[qi].firstIndex(of: label) {
+            selections[qi].remove(at: i)
+        } else {
+            selections[qi].append(label)
+        }
+    }
+
+    // Single-select: pick a label and immediately advance/send
+    private func selectAndProceed(q: AskQuestion, qi: Int, label: String, isLast: Bool) {
+        guard qi < selections.count else { return }
+        selections[qi] = [label]
+        if isLast { sendAnswers(q: q) } else { withAnimation { questionIndex = qi + 1 } }
+    }
+
+    // Multi-select Send/Next button
+    private func proceedFromQuestion(q: AskQuestion, qi: Int, isLast: Bool) {
+        if isLast { sendAnswers(q: q) } else { withAnimation { questionIndex = qi + 1 } }
+    }
+
+    // "Other…" confirm
+    private func commitOtherAndProceed(q: AskQuestion, qi: Int, isLast: Bool) {
+        let text = qi < otherTexts.count ? otherTexts[qi] : ""
+        guard !text.isEmpty else { return }
+        if qi < selections.count { selections[qi] = [text] }
+        if isLast {
+            sendAnswers(q: q)
+        } else {
+            if qi < showOther.count { showOther[qi] = false }
+            withAnimation { questionIndex = qi + 1 }
+        }
+    }
+
+    private func sendAnswers(q: AskQuestion) {
+        let answers = AskQuestion.buildAnswers(questions: q.questions, selections: selections)
+        HookServer.shared.sendQuestionAnswers(answers)
     }
 }
 
@@ -398,6 +868,15 @@ struct ErrorView: View {
     }
 }
 
+/// Brings the Claude desktop app forward (or launches it) — target of the Claude Desktop pill.
+private let claudeDesktopBundleId = "com.anthropic.claudefordesktop"
+
+private func openClaudeDesktopApp() {
+    if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: claudeDesktopBundleId) {
+        NSWorkspace.shared.openApplication(at: url, configuration: .init(), completionHandler: nil)
+    }
+}
+
 // MARK: - Finished
 
 struct FinishedView: View {
@@ -408,21 +887,34 @@ struct FinishedView: View {
             CardBackground(wash: .green)
             VStack(alignment: .leading, spacing: 5) {
                 AgentWho(task: state.focusTask, label: "Claude Code finished")
-                Text(state.focusTask?.steps.last ?? "Session finished")
+                Text({
+                    if let fl = state.focusTask?.finalLine { return fl }
+                    if let s = state.focusTask?.steps.last(where: { !$0.isDiffStep }) { return s }
+                    return String(localized: "Session finished")
+                }())
                     .font(.system(size: 15, weight: .semibold))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                 HStack(spacing: 8) {
-                    #if !APPSTORE
-                    PrimaryButton("Open terminal") {
-                        let terminalBundleIds = ["com.apple.Terminal", "com.googlecode.iterm2", "net.kovidgoyal.kitty", "com.mitchellh.ghostty"]
-                        let activated = terminalBundleIds.compactMap { id in
-                            NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier == id }
-                        }.first.map { $0.activate(options: .activateIgnoringOtherApps) }
-                        if activated == nil {
-                            NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app"))
+                    if state.focusTask?.id == "agent_claude-desktop" {
+                        // Sessions from the Claude desktop app live there, not in a terminal.
+                        PrimaryButton("Open Claude") {
+                            openClaudeDesktopApp()
+                            NotificationCenter.default.post(name: .islandCollapse, object: nil)
                         }
-                        NotificationCenter.default.post(name: .islandCollapse, object: nil)
+                    } else {
+                        #if !APPSTORE
+                        PrimaryButton("Open terminal") {
+                            // The app the session runs in (its terminal, or VS Code), then any known terminal
+                            let task = state.focusTask
+                            if !(task?.id == "integration_claude" && ClaudeHost.activate(task?.hostApp)),
+                               !TerminalTarget.activate(sessionBundleId: task?.sessionBundleId) {
+                                NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app"))
+                            }
+                            NotificationCenter.default.post(name: .islandCollapse, object: nil)
+                        }
+                        #endif
                     }
-                    #endif
                     SecondaryButton("OK") {
                         NotificationCenter.default.post(name: .islandCollapse, object: nil)
                     }
@@ -433,6 +925,142 @@ struct FinishedView: View {
             .padding(.vertical, 4)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+}
+
+// MARK: - Diff Card
+
+struct DiffCardView: View {
+    let diff: FileDiff
+    let onDismiss: () -> Void
+
+    private var allLines: [DiffLine] { diff.hunks.flatMap { $0.lines } }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
+            HStack(spacing: 6) {
+                Button(action: onDismiss) {
+                    HStack(spacing: 3) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 8, weight: .medium))
+                        Text(diff.name)
+                            .font(.system(size: 12, weight: .semibold))
+                            .lineLimit(1)
+                    }
+                    .foregroundColor(Color(hex: "#F5F6F8"))
+                }
+                .buttonStyle(.plain)
+                Spacer(minLength: 2)
+                if diff.added > 0 {
+                    Text("+\(diff.added)")
+                        .font(.system(size: 10, weight: .medium).monospaced())
+                        .foregroundColor(Color(hex: "#22C55E"))
+                }
+                if diff.removed > 0 {
+                    Text("−\(diff.removed)")
+                        .font(.system(size: 10, weight: .medium).monospaced())
+                        .foregroundColor(Color(hex: "#F4505E"))
+                }
+                Button(action: { openInEditor(diff) }) {
+                    Image(systemName: "arrow.up.right")
+                        .font(.system(size: 8, weight: .medium))
+                        .foregroundColor(Color(hex: "#5F646D"))
+                        .frame(width: 14, height: 14)
+                        .background(Color.white.opacity(0.07))
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.top, 6)
+            .padding(.bottom, 3)
+
+            // Content
+            if diff.tooLarge {
+                Text("Diff too large")
+                    .font(.system(size: 10.5))
+                    .foregroundColor(Color(hex: "#6B7079"))
+            } else if allLines.isEmpty {
+                Text("No changes")
+                    .font(.system(size: 10.5))
+                    .foregroundColor(Color(hex: "#6B7079"))
+            } else {
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(allLines.enumerated()), id: \.offset) { _, line in
+                            DiffLineRowView(line: line)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.leading, 108)
+        .padding(.trailing, 10)
+        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onExitCommand { onDismiss() }
+    }
+
+    private func openInEditor(_ diff: FileDiff) {
+        let path = diff.path
+        #if !APPSTORE
+        let codePaths = ["/opt/homebrew/bin/code", "/usr/local/bin/code", "/usr/bin/code",
+                         "\(NSHomeDirectory())/.nvm/current/bin/code"]
+        if let codePath = codePaths.first(where: { FileManager.default.fileExists(atPath: $0) }) {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: codePath)
+            // Write: open at line 1; Edit/MultiEdit: open file without line number
+            p.arguments = diff.isNewFile ? ["-g", "\(path):1"] : [path]
+            try? p.run()
+            return
+        }
+        #endif
+        NSWorkspace.shared.open(URL(fileURLWithPath: path))
+    }
+}
+
+struct DiffLineRowView: View {
+    let line: DiffLine
+
+    private var bgColor: Color {
+        switch line.kind {
+        case .added:   return Color(hex: "#22C55E").opacity(0.12)
+        case .removed: return Color(hex: "#F4505E").opacity(0.12)
+        case .context: return Color.clear
+        }
+    }
+    private var fgColor: Color {
+        switch line.kind {
+        case .added:   return Color(hex: "#86EFAC")
+        case .removed: return Color(hex: "#FCA5A5")
+        case .context: return Color(hex: "#6B7079")
+        }
+    }
+    private var symbol: String {
+        switch line.kind {
+        case .added:   return "+"
+        case .removed: return "−"
+        case .context: return " "
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Text(symbol)
+                .font(.system(size: 10.5).monospaced())
+                .foregroundColor(line.kind == .added ? Color(hex: "#22C55E") :
+                                 line.kind == .removed ? Color(hex: "#F4505E") :
+                                 Color(hex: "#454850"))
+                .frame(width: 12, alignment: .leading)
+            Text(line.text)
+                .font(.system(size: 10.5).monospaced())
+                .foregroundColor(fgColor)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .background(bgColor)
+        .frame(maxWidth: .infinity)
     }
 }
 
@@ -458,12 +1086,8 @@ struct ConfusedView: View {
 
 struct UploadView: View {
     @ObservedObject var state: AppState
-    @State private var dashPhase: CGFloat = 0
-    @State private var breathAngle: Double = 0
-    // Timer only runs while this is the active tab — killed on deactivation
-    @State private var animTimer: Timer? = nil
 
-    private var borderOpacity: Double {
+    private func borderOpacity(breathAngle: Double) -> Double {
         let breathe = 0.11 + 0.04 * (sin(breathAngle) * 0.5 + 0.5)
         return state.fileDragOver ? 0.65 : breathe
     }
@@ -472,13 +1096,21 @@ struct UploadView: View {
         ZStack {
             RoundedRectangle(cornerRadius: 20)
                 .fill(Color(hex: "#0E0F11"))
-            RoundedRectangle(cornerRadius: 20)
-                .stroke(
-                    state.fileDragOver
-                        ? Color(hex: "#22C55E").opacity(borderOpacity)
-                        : Color.white.opacity(borderOpacity),
-                    style: StrokeStyle(lineWidth: 1.5, dash: [6, 5], dashPhase: dashPhase)
-                )
+            // The dashes march at 20 pt/s and the border breathes at 0.9 rad/s, computed from the
+            // clock on every display frame (it was a 20 Hz timer, visibly stepped). Runs only while
+            // this is the open view.
+            TimelineView(.animation(paused: state.view != .upload || state.mode != .expanded)) { tl in
+                let t = tl.date.timeIntervalSinceReferenceDate
+                let dashPhase = CGFloat((t * 20).truncatingRemainder(dividingBy: 11))
+                let opacity = borderOpacity(breathAngle: t * 0.9)
+                RoundedRectangle(cornerRadius: 20)
+                    .stroke(
+                        state.fileDragOver
+                            ? Color(hex: "#22C55E").opacity(opacity)
+                            : Color.white.opacity(opacity),
+                        style: StrokeStyle(lineWidth: 1.5, dash: [6, 5], dashPhase: dashPhase)
+                    )
+            }
             RoundedRectangle(cornerRadius: 20)
                 .fill(RadialGradient(
                     colors: [Color(hex: "#22C55E").opacity(state.fileDragOver ? 0.13 : 0), Color.clear],
@@ -502,27 +1134,6 @@ struct UploadView: View {
             .padding(.leading, 196)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .onChange(of: state.view) { _, newView in
-            newView == .upload ? startTimer() : stopTimer()
-        }
-        .onAppear {
-            if state.view == .upload { startTimer() }
-        }
-        .onDisappear { stopTimer() }
-    }
-
-    private func startTimer() {
-        guard animTimer == nil else { return }
-        // 20 fps — smooth enough for slow dash, 3× lighter than 60fps
-        animTimer = Timer.scheduledTimer(withTimeInterval: 1.0/20.0, repeats: true) { _ in
-            dashPhase  += 1.0          // 20 pt/s march
-            breathAngle += 0.9 / 20.0  // advance sin phase at 0.9 rad/s
-        }
-    }
-
-    private func stopTimer() {
-        animTimer?.invalidate()
-        animTimer = nil
     }
 }
 
@@ -542,7 +1153,8 @@ struct UploadingView: View {
     var body: some View {
         // TimelineView fires at display refresh rate — progress derived from elapsed wall time,
         // not from @Published uploadProgress (which only flips to 1.0 at completion).
-        TimelineView(.animation) { tl in
+        // Only runs while this view is shown (it stays mounted behind the others).
+        TimelineView(.animation(paused: state.view != .uploading || state.mode != .expanded)) { tl in
             let elapsed: Double = {
                 guard let start = state.uploadStartTime else { return 0 }
                 return tl.date.timeIntervalSince(start)
@@ -601,7 +1213,7 @@ struct UploadingView: View {
                             .foregroundColor(Color(hex: "#34D399"))
                             .lineLimit(1).truncationMode(.middle)
                     } else {
-                        Text("Uploading \(state.droppedFile?.name ?? "file")")
+                        Text(String(format: String(localized: "Uploading %@"), state.droppedFile?.name ?? "file"))
                             .font(.system(size: 12.5))
                             .foregroundColor(Color(hex: "#A9ADB5"))
                             .lineLimit(1).truncationMode(.middle)
@@ -633,7 +1245,8 @@ struct ChooseView: View {
             CardBackground(wash: nil)
             VStack(alignment: .leading, spacing: 8) {
                 let fileName = state.droppedFile?.name ?? "file"
-                (Text(fileName).font(.system(size: 14, weight: .semibold)) + Text(" is ready.").font(.system(size: 14, weight: .semibold)))
+                Text(String(format: String(localized: "file.ready %@"), fileName))
+                    .font(.system(size: 14, weight: .semibold))
                 Text("What do you want to do with it?").font(.system(size: 12.5)).foregroundColor(Color(hex: "#9398A1"))
                 HStack(spacing: 8) {
                     PrimaryButton("Ask a question") { state.view = .prompt }
@@ -663,8 +1276,8 @@ struct MailView: View {
                 HStack(spacing: 6) {
                     Text("New email").font(.system(size: 12, weight: .semibold))
                     if let name = state.droppedFile?.name {
-                        Text("with").font(.system(size: 12)).foregroundColor(Color(hex: "#8E939C"))
-                        Text(name).font(.system(size: 12)).foregroundColor(Color(hex: "#8E939C"))
+                        Text(String(format: String(localized: "mail.with %@"), name))
+                            .font(.system(size: 12)).foregroundColor(Color(hex: "#8E939C"))
                             .lineLimit(1).truncationMode(.middle)
                     }
                 }
@@ -688,29 +1301,54 @@ struct MailView: View {
                 }
 
                 HStack(spacing: 8) {
-                    PrimaryButton(isSending ? "Sending…" : "Send") {
+                    PrimaryButton(verbatim: isSending ? String(localized: "Sending…") : String(localized: "Send")) {
                         guard !isSending else { return }
                         sendMail()
                     }
-                    SecondaryButton("Cancel") { state.view = .choose }
+                    SecondaryButton("Cancel") {
+                        if state.voiceMailDraft != nil {
+                            // Prepared by voice: nothing to go back to, close the card.
+                            state.voiceMailDraft = nil
+                            state.droppedFile = nil
+                            NotificationCenter.default.post(name: .islandCollapse, object: nil)
+                        } else {
+                            state.view = .choose
+                        }
+                    }
                 }
             }
             .padding(.leading, 92)
             .padding(.trailing, 18)
             .padding(.vertical, 8)
         }
-        .onAppear { subject = state.droppedFile?.name ?? "" }
+        .onAppear { fillFromVoiceDraft() }
+        .onChange(of: state.voiceMailDraft) { _, _ in fillFromVoiceDraft() }
+    }
+
+    /// A mail prepared by voice arrives filled in; otherwise the dropped file's name.
+    private func fillFromVoiceDraft() {
+        if let d = state.voiceMailDraft {
+            to = d.to
+            subject = d.subject.isEmpty ? (state.droppedFile?.name ?? "") : d.subject
+            bodyText = d.body
+            statusMsg = ""
+        } else if subject.isEmpty {
+            subject = state.droppedFile?.name ?? ""
+        }
     }
 
     private func sendMail() {
-        guard !to.isEmpty else { statusMsg = "Missing recipient."; return }
+        guard !to.isEmpty else { statusMsg = String(localized: "Missing recipient."); return }
         let subj = subject.isEmpty ? (state.droppedFile?.name ?? "File") : subject
 
-        // Prefer Resend if API key + sender address are configured
+        // Prefer Resend if API key + sender address are configured — except for a mail
+        // prepared by voice, which goes through the user's own Apple Mail account.
         let apiKey  = KeychainStore.shared.get("resend-api-key")
         let fromAddr = KeychainStore.shared.get("resend-from")
 
-        if let apiKey, let fromAddr {
+        if state.voiceMailDraft != nil {
+            sendViaAppleMail(to: to, subject: subj)
+        } else if let apiKey, let fromAddr {
             isSending = true
             statusMsg = ""
             let recipient = to
@@ -768,7 +1406,7 @@ struct MailView: View {
         #if APPSTORE
         // App Store: no AppleScript — use NSSharingService to compose (user sends manually)
         guard let service = NSSharingService(named: .composeEmail) else {
-            statusMsg = "Mail not available."
+            statusMsg = String(localized: "Mail not available.")
             return
         }
         var items: [Any] = [bodyText.isEmpty ? " " : bodyText]
@@ -811,14 +1449,27 @@ struct MailView: View {
             send m
         end tell
         """
-        var err: NSDictionary?
-        NSAppleScript(source: script)?.executeAndReturnError(&err)
-        if err == nil { onSuccess(recipient: to) }
-        else { statusMsg = "Mail error: \(err?["NSAppleScriptErrorMessage"] as? String ?? "unknown")" }
+        // Off the main thread: the script waits for Mail (and has a 1 s delay), which used
+        // to freeze the whole island until the mail was sent.
+        isSending = true
+        statusMsg = ""
+        let recipient = to
+        Task {
+            let message: String? = await Task.detached(priority: .userInitiated) {
+                var err: NSDictionary?
+                NSAppleScript(source: script)?.executeAndReturnError(&err)
+                return err.map { "Mail error: \($0["NSAppleScriptErrorMessage"] as? String ?? "unknown")" }
+            }.value
+            await MainActor.run {
+                isSending = false
+                if let message { statusMsg = message } else { onSuccess(recipient: recipient) }
+            }
+        }
         #endif
     }
 
     private func onSuccess(recipient: String) {
+        state.voiceMailDraft = nil
         SoundEngine.shared.play("send")
         NotificationCenter.default.post(name: .triggerEmote, object: BotEmote.wink)
         state.noteMessage = "Email sent to \(recipient)."
@@ -831,11 +1482,49 @@ struct MailView: View {
 
 // MARK: - Prompt (chat)
 
+#if !APPSTORE
+/// The mic's right-click menu: Automatic (the user's languages) or one fixed language.
+private struct DictationLanguageMenu: View {
+    @Bindable var dictation: MacDictation
+
+    var body: some View {
+        let automatic = MacDictation.automaticLocales().map(\.identifier)
+        Picker(String(localized: "Dictation language"), selection: $dictation.language) {
+            Text(String(localized: "Automatic") + " (" + automatic.map(MacDictation.name(of:)).joined(separator: ", ") + ")")
+                .tag(MacDictation.automatic)
+            ForEach(quickChoices(automatic), id: \.self) { id in
+                Text(MacDictation.name(of: id)).tag(id)
+            }
+        }
+        .pickerStyle(.inline)
+        Menu(String(localized: "Other languages")) {
+            Picker(String(localized: "Dictation language"), selection: $dictation.language) {
+                ForEach(MacDictation.allLanguages, id: \.self) { id in
+                    Text(MacDictation.name(of: id)).tag(id)
+                }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+        }
+    }
+
+    /// Automatic's languages, plus the fixed one when it is another.
+    private func quickChoices(_ automatic: [String]) -> [String] {
+        let chosen = dictation.language
+        return chosen == MacDictation.automatic || automatic.contains(chosen) ? automatic : automatic + [chosen]
+    }
+}
+#endif
+
 struct PromptView: View {
     @ObservedObject var state: AppState
     @State private var text: String = ""
     @FocusState private var focused: Bool
+    @State private var showModelPicker = false
 
+    #if !APPSTORE
+    @State private var dictation = MacDictation()
+    #endif
     var body: some View {
         ZStack(alignment: .leading) {
             CardBackground(wash: .indigo)
@@ -850,7 +1539,12 @@ struct PromptView: View {
                         ScrollView(.vertical, showsIndicators: false) {
                             VStack(alignment: .leading, spacing: 6) {
                                 ForEach(state.chatHistory) { msg in
-                                    ChatBubble(message: msg).id(msg.id)
+                                    ChatBubble(
+                                        message: msg,
+                                        isStreaming: state.stateOverride != nil
+                                            && msg.role == .assistant
+                                            && msg.id == state.chatHistory.last?.id
+                                    ).id(msg.id)
                                 }
                                 if state.stateOverride != nil {
                                     HStack { TypingDotsView(); Spacer(minLength: 32) }
@@ -859,13 +1553,17 @@ struct PromptView: View {
                             }
                             .padding(.vertical, 2)
                         }
-                        .onChange(of: state.chatHistory.count) { _, _ in
-                            if let last = state.chatHistory.last {
-                                withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                        .onChange(of: state.chatHistory) { _, _ in
+                            if let last = state.chatHistory.last(where: { !$0.content.isEmpty }) {
+                                proxy.scrollTo(last.id, anchor: .bottom)
                             }
                         }
                         .onChange(of: state.stateOverride) { _, v in
-                            if v != nil { withAnimation { proxy.scrollTo("typing", anchor: .bottom) } }
+                            if v != nil {
+                                withAnimation { proxy.scrollTo("typing", anchor: .bottom) }
+                            } else if let last = state.chatHistory.last(where: { !$0.content.isEmpty }) {
+                                withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                            }
                         }
                         .onAppear {
                             if let last = state.chatHistory.last {
@@ -878,12 +1576,65 @@ struct PromptView: View {
                     Spacer()
                 }
 
+                HStack(spacing: 0) {
+                    Spacer()
+                    Button {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
+                            showModelPicker.toggle()
+                        }
+                    } label: {
+                        HStack(spacing: 5) {
+                            Circle()
+                                .fill(Color(hex: state.chatProvider.accentHex))
+                                .frame(width: 6, height: 6)
+                            Text(state.activeChatModel)
+                                .font(.system(size: 10.5, weight: .medium))
+                                .foregroundColor(Color(hex: "#7B8089"))
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.system(size: 8))
+                                .foregroundColor(Color(hex: "#5C6370"))
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.white.opacity(0.06))
+                        .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .popover(isPresented: $showModelPicker, arrowEdge: .bottom) {
+                        ModelPickerView(state: state, isPresented: $showModelPicker)
+                            .frame(width: 300)
+                    }
+                }
+                .padding(.horizontal, 10)
+
                 HStack(spacing: 8) {
-                    TextField(state.chatHistory.isEmpty ? "Ask me anything…" : "Continue…", text: $text)
+                    TextField(state.chatHistory.isEmpty ? String(localized: "Ask me anything…") : String(localized: "Continue…"), text: $text)
                         .textFieldStyle(.plain)
                         .font(.system(size: 13))
                         .focused($focused)
                         .onSubmit { sendMessage() }
+
+                    #if !APPSTORE
+                    // Dictate instead of typing (on-device speech recognition when available)
+                    Button {
+                        Task {
+                            if dictation.isRecording { text = await dictation.finish() }
+                            else { await dictation.start(from: text) }
+                        }
+                    } label: {
+                        Image(systemName: dictation.isRecording ? "mic.fill" : "mic")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(dictation.isRecording ? Color(hex: "#F4505E") : Color(hex: "#8E939C"))
+                            .frame(width: 18, height: 18)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(dictation.isRecording ? String(localized: "Stop dictation") : String(localized: "Dictate (right-click to choose the language)"))
+                    .contextMenu { DictationLanguageMenu(dictation: dictation) }
+                    .onChange(of: dictation.transcript) { _, _ in
+                        if dictation.isRecording { text = dictation.text }
+                    }
+                    #endif
 
                     Button(action: sendMessage) {
                         Image(systemName: "arrow.up")
@@ -905,9 +1656,40 @@ struct PromptView: View {
         }
         .padding(.bottom, 10)
         .onAppear { focused = true }
+        .onChange(of: state.view) { _, view in
+            if view == .prompt {
+                state.fetchModelsIfNeeded(for: state.chatProvider)
+            }
+        }
+        .onChange(of: state.chatProvider) { _, provider in
+            if state.view == .prompt {
+                state.fetchModelsIfNeeded(for: provider)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .islandSendMessage)) { _ in
+            guard state.view == .prompt else { return }
+            sendMessage()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .islandNewConversation)) { _ in
+            guard state.view == .prompt else { return }
+            text = ""
+            state.chatHistory = []
+            ClaudeService.shared.clearConversation()
+            focused = true
+        }
     }
 
     private func sendMessage() {
+        #if !APPSTORE
+        // Still dictating: take the final words (and the right language) before sending.
+        if dictation.isRecording {
+            Task {
+                text = await dictation.finish()
+                sendMessage()
+            }
+            return
+        }
+        #endif
         let query = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return }
         text = ""
@@ -915,7 +1697,7 @@ struct PromptView: View {
         state.chatHistory.append(ChatMessage(role: .user, content: query))
         state.stateOverride = .thinking
         Task {
-            if state.chatProvider == "grok" {
+            if state.chatProvider == .grok {
                 await GrokService.shared.chat(query: query, context: state.promptContext, state: state)
             } else {
                 await ClaudeService.shared.chat(query: query, context: state.promptContext, state: state)
@@ -926,28 +1708,205 @@ struct PromptView: View {
 }
 
 
-struct ChatBubble: View {
-    let message: ChatMessage
+// MARK: - Model / provider picker
+
+/// Wrapping horizontal flow layout — used by ModelPickerView and QuestionView.
+struct ChipFlowLayout: Layout {
+    var spacing: CGFloat = 6
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) -> CGSize {
+        let r = rows(maxW: proposal.replacingUnspecifiedDimensions().width, subviews: subviews)
+        return r.size
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) {
+        let r = rows(maxW: bounds.width, subviews: subviews)
+        for (idx, pt) in r.placements.enumerated() {
+            subviews[idx].place(at: CGPoint(x: bounds.minX + pt.x, y: bounds.minY + pt.y), proposal: .unspecified)
+        }
+    }
+    private func rows(maxW: CGFloat, subviews: Subviews) -> (size: CGSize, placements: [(x: CGFloat, y: CGFloat)]) {
+        var x: CGFloat = 0, y: CGFloat = 0, lineH: CGFloat = 0, maxX: CGFloat = 0
+        var pts: [(x: CGFloat, y: CGFloat)] = []
+        for sv in subviews {
+            let sz = sv.sizeThatFits(.unspecified)
+            if x + sz.width > maxW, x > 0 { x = 0; y += lineH + spacing; lineH = 0 }
+            pts.append((x: x, y: y))
+            x += sz.width + spacing
+            lineH = max(lineH, sz.height)
+            maxX = max(maxX, x - spacing)
+        }
+        return (CGSize(width: max(maxX, 0), height: y + lineH), pts)
+    }
+}
+
+struct ModelPickerView: View {
+    @ObservedObject var state: AppState
+    @Binding var isPresented: Bool
 
     var body: some View {
-        HStack(alignment: .top) {
-            if message.role == .user {
-                Spacer(minLength: 32)
-                Text(message.content)
-                    .font(.system(size: 12.5))
-                    .foregroundColor(Color(hex: "#F1F2F4"))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 10).padding(.vertical, 6)
-                    .background(Color.white.opacity(0.13))
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-            } else {
-                Text(message.content)
-                    .font(.system(size: 12.5))
-                    .foregroundColor(Color(hex: "#B0B5BE"))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-                Spacer(minLength: 8)
+        VStack(alignment: .leading, spacing: 12) {
+            // Provider chips — wrap; hide local providers when not connected and not already active
+            let visibleProviders = ChatProvider.allCases.filter { p in
+                if p == .ollama   { return !AppState.shared.ollamaServerURL.isEmpty   || state.chatProvider == .ollama }
+                if p == .lmstudio { return !AppState.shared.lmstudioServerURL.isEmpty || state.chatProvider == .lmstudio }
+                return true
+            }
+            ChipFlowLayout(spacing: 6) {
+                ForEach(visibleProviders, id: \.self) { provider in
+                    Button {
+                        guard provider != state.chatProvider else { return }
+                        withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
+                            state.chatProvider = provider
+                        }
+                        NotificationCenter.default.post(name: .triggerEmote, object: BotEmote.surprised)
+                        SoundEngine.shared.play("pop")
+                    } label: {
+                        HStack(spacing: 5) {
+                            Circle()
+                                .fill(Color(hex: provider.accentHex))
+                                .frame(width: 7, height: 7)
+                            Text(provider.displayName)
+                                .font(.system(size: 12, weight: state.chatProvider == provider ? .semibold : .regular))
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(state.chatProvider == provider
+                                    ? Color(hex: provider.accentHex).opacity(0.18)
+                                    : Color.white.opacity(0.06))
+                        .overlay(Capsule().stroke(
+                            state.chatProvider == provider
+                                ? Color(hex: provider.accentHex).opacity(0.5)
+                                : Color.white.opacity(0.1),
+                            lineWidth: 1))
+                        .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            Divider().opacity(0.2)
+
+            // Model list for current provider — fetched dynamically
+            modelListView
+                .frame(height: 260, alignment: .top)
+        }
+        .padding(14)
+        .background(Color(hex: "#16171B"))
+        .onAppear {
+            // Force-refresh local providers every time the picker opens
+            if state.chatProvider.isLocal {
+                state.fetchedProviderModels[state.chatProvider] = nil
+                state.providerModelFetchError[state.chatProvider] = nil
+            }
+            state.fetchModelsIfNeeded(for: state.chatProvider)
+        }
+        .onChange(of: state.chatProvider) { _, provider in
+            if provider.isLocal {
+                state.fetchedProviderModels[provider] = nil
+                state.providerModelFetchError[provider] = nil
+            }
+            state.fetchModelsIfNeeded(for: provider)
+        }
+    }
+
+    @ViewBuilder
+    private var modelListView: some View {
+        if state.loadingProviderModels.contains(state.chatProvider) {
+            HStack(spacing: 8) {
+                ProgressView().scaleEffect(0.7)
+                Text("Loading models…")
+                    .font(.system(size: 12))
+                    .foregroundColor(Color(hex: "#8A8F98"))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
+        } else if let error = state.providerModelFetchError[state.chatProvider] {
+            Text(error)
+                .font(.system(size: 11))
+                .foregroundColor(Color(hex: "#8A8F98"))
+                .padding(.vertical, 4)
+        } else if let models = state.fetchedProviderModels[state.chatProvider] {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(models, id: \.id) { model in
+                        Button {
+                            switch state.chatProvider {
+                            case .anthropic: state.claudeModel = model.id
+                            case .google:    state.googleChatModel = model.id
+                            case .openai:    state.openAIChatModel = model.id
+                            case .ollama:    state.ollamaChatModel = model.id
+                            case .lmstudio:  state.lmstudioChatModel = model.id
+                            case .deepseek:  state.deepseekChatModel = model.id
+                            case .qwen:      state.qwenChatModel = model.id
+                            case .moonshot:  state.moonshotChatModel = model.id
+                            case .grok:      state.grokModel = model.id
+                            }
+                            isPresented = false
+                            SoundEngine.shared.play("blip")
+                        } label: {
+                            HStack {
+                                Text(model.label)
+                                    .font(.system(size: 12))
+                                    .foregroundColor(state.activeChatModel == model.id
+                                                     ? Color(hex: state.chatProvider.accentHex)
+                                                     : Color(hex: "#C8CDD4"))
+                                Spacer()
+                                if state.activeChatModel == model.id {
+                                    Image(systemName: "checkmark")
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .foregroundColor(Color(hex: state.chatProvider.accentHex))
+                                }
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 6)
+                            .background(state.activeChatModel == model.id
+                                        ? Color(hex: state.chatProvider.accentHex).opacity(0.1)
+                                        : Color.clear)
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct ChatBubble: View {
+    let message: ChatMessage
+    var isStreaming: Bool = false
+
+    var body: some View {
+        if !message.content.isEmpty {
+            HStack(alignment: .top) {
+                if message.role == .user {
+                    Spacer(minLength: 32)
+                    Text(message.content)
+                        .font(.system(size: 12.5))
+                        .foregroundColor(Color(hex: "#F1F2F4"))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .background(Color.white.opacity(0.13))
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                } else {
+                    Group {
+                        if isStreaming {
+                            TimelineView(.periodic(from: .now, by: 0.5)) { tl in
+                                let show = Int(tl.date.timeIntervalSinceReferenceDate / 0.5).isMultiple(of: 2)
+                                Text(message.content + (show ? "▌" : " "))
+                                    .font(.system(size: 12.5))
+                                    .foregroundColor(Color(hex: "#B0B5BE"))
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        } else {
+                            ChatMarkdownView(markdown: message.content)
+                        }
+                    }
+                    .padding(.horizontal, 8).padding(.vertical, 6)
+                    .background(Color.white.opacity(0.05))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    Spacer(minLength: 8)
+                }
             }
         }
     }
@@ -981,9 +1940,9 @@ struct SearchingView: View {
 
     var label: String {
         switch state.promptContext {
-        case .window(_, let title, _): return "Claude is reading \(title)…"
-        case .file(let name, _): return "Claude is reading \(name)…"
-        case nil: return "Claude is searching…"
+        case .window(_, let title, _): return String(format: String(localized: "Claude is reading %@…"), title)
+        case .file(let name, _):       return String(format: String(localized: "Claude is reading %@…"), name)
+        case nil:                      return String(localized: "Claude is searching…")
         }
     }
 
@@ -1081,25 +2040,90 @@ struct NoteView: View {
 struct IntegrationCardView: View {
     let task: AgentTask
     @Binding var showingDetail: Bool
+    var onDiffTap: ((Int) -> Void)? = nil
     @ObservedObject private var appState = AppState.shared
+    @State private var githubDetailSection: GitHubDetailSection = .myPRs
+    #if !APPSTORE
+    @ObservedObject private var mailController = MailController.shared
+    #endif
 
     private var isConfigured: Bool {
         switch task.id {
-        case "integration_claude":
-            #if APPSTORE
-            // Sandboxed: can't read ~/.claude directly — check install flag set by HookServer
-            return UserDefaults.standard.bool(forKey: "coucouHooksInstalled")
+        // Cursor sessions are Claude Code running in Cursor's integrated terminal,
+        // so the Cursor pill is set up exactly when the Claude Code hooks are.
+        case "integration_claude", "agent_cursor":
+            return HookServer.claudeHooksInstalled()
+        case "agent_codex":
+            #if !APPSTORE
+            return HookServer.codexHooksInstalled()
             #else
-            let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/settings.json")
-            guard let data = try? Data(contentsOf: url),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let hooks = json["hooks"] as? [String: Any],
-                  let ss = hooks["SessionStart"] as? [[String: Any]] else { return false }
-            return ss.contains { ($0["hooks"] as? [[String: Any]])?.contains {
-                let cmd = $0["command"] as? String
-                return cmd?.contains("NotchBuddy") == true || cmd?.contains("coucou") == true
-            } ?? false }
+            return false
             #endif
+        case "agent_gemini":
+            #if !APPSTORE
+            return HookServer.geminiHooksInstalled()
+            #else
+            return false
+            #endif
+        case "agent_antigravity":
+            #if !APPSTORE
+            return HookServer.agyHooksInstalled()
+            #else
+            return false
+            #endif
+        case "agent_copilot":
+            #if !APPSTORE
+            return HookServer.copilotHooksInstalled()
+            #else
+            return false
+            #endif
+        case "agent_muse":
+            #if !APPSTORE
+            return HookServer.museHooksInstalled()
+            #else
+            return false
+            #endif
+        case "agent_opencode":
+            #if !APPSTORE
+            return HookServer.openCodePluginInstalled()
+            #else
+            return false
+            #endif
+        case "agent_amp":
+            #if !APPSTORE
+            return HookServer.ampPluginInstalled()
+            #else
+            return false
+            #endif
+        case "agent_hermes":
+            #if !APPSTORE
+            return HookServer.hermesPluginInstalled()
+            #else
+            return false
+            #endif
+        case "agent_claude-desktop":
+            return true  // nothing to install: the relay tags desktop sessions on its own
+        case "integration_music":
+            #if !APPSTORE
+            return true  // Apple Music is always installed on macOS
+            #else
+            return false
+            #endif
+        case "integration_mail":
+            #if !APPSTORE
+            return true  // Apple Mail is always installed on macOS: nothing to set up
+            #else
+            return false
+            #endif
+        case "integration_crypto":
+            return true  // public market data: no key, nothing to set up
+        case "integration_portfolio":
+            return PortfolioSettings.hasAnyAccount
+        case "ai_anthropic":  return KeychainStore.shared.get("anthropic-api-key") != nil
+        case "ai_google":     return KeychainStore.shared.get("google-api-key")    != nil
+        case "ai_openai":     return KeychainStore.shared.get("openai-api-key")    != nil
+        case "ai_ollama":     return !AppState.shared.ollamaServerURL.isEmpty
+        case "ai_lmstudio":   return !AppState.shared.lmstudioServerURL.isEmpty
         case "integration_resend":  return KeychainStore.shared.get("resend-api-key") != nil
         case "integration_n8n":     return KeychainStore.shared.get("n8n-api-key")    != nil
         case "integration_vercel":  return KeychainStore.shared.get("vercel-token")   != nil
@@ -1127,9 +2151,11 @@ struct IntegrationCardView: View {
         }
     }
 
-    // VS Code with active session: show ticker layout (same as overview)
-    private var vsCodeSessionActive: Bool {
-        task.id == "integration_claude" && (task.state != .idle || !task.steps.isEmpty)
+    // Workspace/agent pill with active session: show ticker layout
+    private var agentSessionActive: Bool {
+        guard let def = PillCatalog.definition(for: task.id) else { return false }
+        guard def.category == .workspace || def.category == .agent else { return false }
+        return task.state != .idle || !task.steps.isEmpty
     }
 
     // n8n with a finished execution: show result row instead of "Open n8n" button
@@ -1148,9 +2174,14 @@ struct IntegrationCardView: View {
         task.id == "integration_resend" && !appState.resendEmails.isEmpty
     }
 
-    // GitHub with stats loaded
+    // GitHub with stats or pulse loaded
     private var githubHasData: Bool {
-        task.id == "integration_github" && appState.githubStats != nil
+        task.id == "integration_github" && (appState.githubPulse != nil || appState.githubStats != nil)
+    }
+
+    // GitHub with pulse loaded (richer card)
+    private var githubHasPulse: Bool {
+        task.id == "integration_github" && appState.githubPulse != nil
     }
 
     // Stripe: show card as soon as first poll completes (balance OR payments)
@@ -1166,6 +2197,116 @@ struct IntegrationCardView: View {
     // Notion: show pages as soon as first poll completes
     private var notionHasData: Bool {
         task.id == "integration_notion" && appState.notionLoaded
+    }
+
+    // Apple Music: show card when a track is loaded (playing or paused) or automation is denied
+    private var musicIsActive: Bool {
+        #if !APPSTORE
+        guard task.id == "integration_music" else { return false }
+        if appState.musicAutomationDenied { return true }
+        return MusicController.shared.trackTitle != nil
+        #else
+        return false
+        #endif
+    }
+
+    // Apple Mail: the message list once Mail is open and allowed (else the idle card says why)
+    private var mailHasData: Bool {
+        #if !APPSTORE
+        guard task.id == "integration_mail" else { return false }
+        let mail = MailController.shared
+        return mail.isMailRunning && !mail.automationDenied
+        #else
+        return false
+        #endif
+    }
+
+    // Spotify: its own card for every state (playing, idle, not installed, Automation denied)
+    private var isSpotify: Bool {
+        #if !APPSTORE
+        return task.id == "integration_spotify"
+        #else
+        return false
+        #endif
+    }
+
+    private var statusDot: Color {
+        #if !APPSTORE
+        if task.id == "integration_music" {
+            if appState.musicAutomationDenied { return Color(hex: "#F4505E") }
+            return appState.musicPlaying ? Color(hex: "#FA2D48") : Color(hex: "#22C55E")
+        }
+        #endif
+        #if !APPSTORE
+        if task.id == "integration_mail" {
+            if mailController.automationDenied { return Color(hex: "#F4505E") }
+            return mailController.isMailRunning ? Color(hex: "#22C55E") : Color(hex: "#6B7079")
+        }
+        #endif
+        if PillCatalog.definition(for: task.id)?.comingSoon == true { return Color(hex: "#6B7079") }
+        let svcErr = task.id == "integration_stripe" ? appState.stripeError
+                   : task.id == "integration_calcom"  ? appState.calcomError
+                   : nil
+        if svcErr != nil { return Color(hex: "#F4505E") }
+        return isConfigured ? Color(hex: "#22C55E") : Color(hex: "#F4505E")
+    }
+
+    private var statusLabel: String {
+        #if !APPSTORE
+        if task.id == "integration_music" {
+            if appState.musicAutomationDenied { return String(localized: "Automation not allowed") }
+            if appState.musicPlaying { return String(format: String(localized: "Playing · %@"), MusicController.shared.trackTitle ?? String(localized: "Unknown")) }
+            return String(localized: "Not playing")
+        }
+        #endif
+        #if !APPSTORE
+        if task.id == "integration_mail" {
+            if mailController.automationDenied { return String(localized: "Automation not allowed") }
+            return mailController.isMailRunning ? String(localized: "Loading…") : String(localized: "Mail is closed")
+        }
+        #endif
+        if PillCatalog.definition(for: task.id)?.comingSoon == true { return String(localized: "Coming soon") }
+        let svcErr = task.id == "integration_stripe" ? appState.stripeError
+                   : task.id == "integration_calcom"  ? appState.calcomError
+                   : nil
+        if let err = svcErr { return err }
+        // Pills driven by hooks, never by a key: the idle card reports whether the
+        // hooks are in place. integration_claude read "Connected · loading…" with
+        // nothing left to load — a session replaces this card, it never resolves here.
+        let isHooks = task.id == "integration_claude" || task.id == "agent_gemini"
+                   || task.id == "agent_antigravity"  || task.id == "agent_cursor"
+                   || task.id == "agent_codex"        || task.id == "agent_copilot"
+                   || task.id == "agent_muse"         || task.id == "agent_opencode"
+                   || task.id == "agent_amp"          || task.id == "agent_hermes"
+        let isAI    = ChatProvider(pillID: task.id) != nil
+        if isConfigured {
+            if isHooks { return String(localized: "Hooks installed") }
+            // No key or poller behind this pill: it only reflects hook events.
+            if task.id == "agent_claude-desktop" { return String(localized: "Ready · no setup needed") }
+            if isAI {
+                let provider = ChatProvider(pillID: task.id)!
+                if provider.isLocal {
+                    let model = provider == .ollama ? appState.ollamaChatModel : appState.lmstudioChatModel
+                    return String(localized: "Connected · \(model)")
+                }
+                let model: String
+                switch task.id {
+                case "ai_anthropic": model = appState.claudeModel
+                case "ai_google":    model = appState.googleChatModel
+                case "ai_openai":    model = appState.openAIChatModel
+                default:             model = ""
+                }
+                return String(localized: "Key configured · \(model)")
+            }
+            return String(localized: "Connected · loading…")
+        } else {
+            if isHooks { return String(localized: "Hooks not installed") }
+            if isAI {
+                let provider = ChatProvider(pillID: task.id)!
+                return provider.isLocal ? String(localized: "Not connected") : String(localized: "Key not configured")
+            }
+            return String(localized: "Key not configured")
+        }
     }
 
     var body: some View {
@@ -1187,6 +2328,28 @@ struct IntegrationCardView: View {
         } else if resendHasData {
             ResendCardView(emails: appState.resendEmails, total: appState.resendTotal)
                 .transition(.opacity)
+        } else if showingDetail && githubHasPulse {
+            GitHubDetailView(
+                section: githubDetailSection,
+                pulse: appState.githubPulse!,
+                activity: appState.githubActivity,
+                stats: appState.githubStats,
+                onBack: {
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) { showingDetail = false }
+                }
+            )
+            .transition(.opacity)
+        } else if githubHasPulse {
+            GitHubPulseCardView(
+                pulse: appState.githubPulse!,
+                stats: appState.githubStats,
+                activity: appState.githubActivity,
+                onTapSection: { section in
+                    githubDetailSection = section
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) { showingDetail = true }
+                }
+            )
+            .transition(.opacity)
         } else if githubHasData {
             GitHubStatsCardView(stats: appState.githubStats!)
                 .transition(.opacity)
@@ -1199,7 +2362,29 @@ struct IntegrationCardView: View {
         } else if notionHasData {
             NotionCardView()
                 .transition(.opacity)
-        } else if vsCodeSessionActive {
+        } else if musicIsActive {
+            #if !APPSTORE
+            MusicCardView()
+                .transition(.opacity)
+            #endif
+        } else if task.id == "integration_crypto" {
+            // Its own card in every state (loading, no coins, prices).
+            CryptoCardView()
+                .transition(.opacity)
+        } else if task.id == "integration_portfolio" {
+            PortfolioCardView()
+                .transition(.opacity)
+        } else if mailHasData {
+            #if !APPSTORE
+            MailCardView()
+                .transition(.opacity)
+            #endif
+        } else if isSpotify {
+            #if !APPSTORE
+            SpotifyCardView()
+                .transition(.opacity)
+            #endif
+        } else if agentSessionActive {
             // Active session view — reuse overview layout
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 6) {
@@ -1211,7 +2396,7 @@ struct IntegrationCardView: View {
                         .foregroundColor(Color(hex: "#F5F6F8"))
                         .lineLimit(1).truncationMode(.tail)
                         .layoutPriority(1)
-                    Text("Claude Code")
+                    Text(PillCatalog.definition(for: task.id)?.sessionSubtitle ?? "Agent")
                         .font(.system(size: 11))
                         .foregroundColor(Color(hex: "#8E939C"))
                         .lineLimit(1).truncationMode(.tail)
@@ -1227,7 +2412,7 @@ struct IntegrationCardView: View {
                 .padding(.leading, 108)
                 .padding(.trailing, 36)
 
-                TickerView(task: task)
+                TickerView(task: task, onDiffTap: onDiffTap)
                     .frame(height: 44)
                     .padding(.top, 6)
                     .padding(.leading, 108)
@@ -1242,10 +2427,11 @@ struct IntegrationCardView: View {
                     Circle()
                         .fill(Color(hex: task.color))
                         .frame(width: 7, height: 7)
-                    Text(task.id == "integration_claude" ? "VS Code" : task.name)
+                    Text(task.id == "integration_claude" ? ClaudeHost.pillName(hostApp: task.hostApp)
+                                                         : PillCatalog.definition(for: task.id)?.name ?? task.name)
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundColor(Color(hex: "#F5F6F8"))
-                    Text("Integration")
+                    Text(PillCatalog.definition(for: task.id)?.subtitle ?? "Integration")
                         .font(.system(size: 11))
                         .foregroundColor(Color(hex: "#8E939C"))
                     Spacer(minLength: 2)
@@ -1255,15 +2441,8 @@ struct IntegrationCardView: View {
                 .padding(.trailing, 36)
 
                 HStack(spacing: 5) {
-                    let stripeErr = task.id == "integration_stripe" ? appState.stripeError
-                                  : task.id == "integration_calcom"  ? appState.calcomError
-                                  : nil
-                    let dot = stripeErr != nil ? Color(hex: "#F4505E")
-                            : isConfigured    ? Color(hex: "#22C55E")
-                            :                   Color(hex: "#F4505E")
-                    let label = stripeErr ?? (isConfigured ? "Connected · loading…" : "Key not configured")
-                    Circle().fill(dot).frame(width: 5, height: 5)
-                    Text(label)
+                    Circle().fill(statusDot).frame(width: 5, height: 5)
+                    Text(statusLabel)
                         .font(.system(size: 11))
                         .foregroundColor(Color(hex: "#6B7079"))
                 }
@@ -1271,11 +2450,77 @@ struct IntegrationCardView: View {
                 .padding(.top, 2)
 
                 HStack(spacing: 8) {
-                    if task.id == "integration_claude" {
+                    if task.id == "integration_claude", task.hostApp != nil {
+                        Button("Open \(ClaudeHost.name(for: task.hostApp))") { ClaudeHost.activate(task.hostApp) }
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(Color(hex: task.color).opacity(0.7))
+                            .buttonStyle(.plain)
+                    } else if task.id == "integration_claude" {
                         Button("Open Visual Studio Code") { openVSCode() }
                             .font(.system(size: 11, weight: .medium))
                             .foregroundColor(Color(hex: task.color).opacity(0.7))
                             .buttonStyle(.plain)
+                    } else if task.id == "agent_cursor" {
+                        #if !APPSTORE
+                        if let url = NSWorkspace.shared.urlForApplication(
+                            withBundleIdentifier: "com.todesktop.230313mzl4w4u92") {
+                            Button("Open Cursor") {
+                                NSWorkspace.shared.openApplication(at: url, configuration: .init(),
+                                                                   completionHandler: nil)
+                            }
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(Color(hex: task.color).opacity(0.85))
+                            .buttonStyle(.plain)
+                        }
+                        #endif
+                    } else if task.id == "agent_codex" {
+                        #if !APPSTORE
+                        if let url = NSWorkspace.shared.urlForApplication(
+                            withBundleIdentifier: "com.openai.codex") {
+                            Button("Open Codex") {
+                                NSWorkspace.shared.openApplication(at: url, configuration: .init(),
+                                                                   completionHandler: nil)
+                            }
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(Color(hex: task.color).opacity(0.85))
+                            .buttonStyle(.plain)
+                        }
+                        #endif
+                    } else if let provider = ChatProvider(pillID: task.id) {
+                        if isConfigured {
+                            Button(String(format: String(localized: "Chat with %@"), task.name)) {
+                                switchChatProvider(provider)
+                            }
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(Color(hex: task.color).opacity(0.85))
+                            .buttonStyle(.plain)
+                        }
+                    } else if task.id == "integration_music" {
+                        #if !APPSTORE
+                        Button("Open Music") { MusicController.shared.openMusic() }
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(Color(hex: task.color).opacity(0.85))
+                            .buttonStyle(.plain)
+                        if appState.musicAutomationDenied {
+                            Button("Open Settings…") { MusicController.shared.openAutomationSettings() }
+                                .font(.system(size: 11))
+                                .foregroundColor(Color(hex: "#8E939C"))
+                                .buttonStyle(.plain)
+                        }
+                        #endif
+                    } else if task.id == "integration_mail" {
+                        #if !APPSTORE
+                        Button("Open Mail") { MailController.shared.openMail() }
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(Color(hex: task.color).opacity(0.85))
+                            .buttonStyle(.plain)
+                        if mailController.automationDenied {
+                            Button("Open Settings…") { MailController.shared.openAutomationSettings() }
+                                .font(.system(size: 11))
+                                .foregroundColor(Color(hex: "#8E939C"))
+                                .buttonStyle(.plain)
+                        }
+                        #endif
                     } else if n8nHasActivity {
                         // Clickable pill — tap to open execution detail
                         let success = task.state == .finished
@@ -1305,13 +2550,11 @@ struct IntegrationCardView: View {
                             .foregroundColor(Color(hex: task.color).opacity(0.85))
                             .buttonStyle(.plain)
                     }
-                    if task.id == "integration_stripe" {
-                        if isConfigured {
-                            Button("Refresh") { Task { @MainActor in StripePoller.shared.pollNow() } }
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundColor(Color(hex: "#0570DE").opacity(0.85))
-                                .buttonStyle(.plain)
-                        }
+                    if task.id == "integration_stripe" && isConfigured {
+                        Button("Refresh") { Task { @MainActor in StripePoller.shared.pollNow() } }
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(Color(hex: "#0570DE").opacity(0.85))
+                            .buttonStyle(.plain)
                     }
                     if task.id == "integration_calcom" && isConfigured {
                         Button("Refresh") { Task { @MainActor in CalcomPoller.shared.pollNow() } }
@@ -1319,9 +2562,20 @@ struct IntegrationCardView: View {
                             .foregroundColor(Color(hex: "#C9956A").opacity(0.85))
                             .buttonStyle(.plain)
                     }
-                    if !isConfigured {
+                    // Settings button: shown when not configured, except cursor/codex and music
+                    if !isConfigured
+                       && task.id != "agent_cursor"
+                       && task.id != "agent_codex"
+                       && task.id != "integration_music"
+                       && task.id != "integration_mail" {
                         Button("Settings…") {
-                            NotificationCenter.default.post(name: .openFullSettings, object: nil)
+                            let section: String
+                            switch PillCatalog.definition(for: task.id)?.category {
+                            case .workspace, .agent: section = "agents"
+                            case .ai:                section = "chat"
+                            default:                 section = "integrations"
+                            }
+                            NotificationCenter.default.post(name: .openFullSettings, object: section)
                         }
                         .font(.system(size: 11))
                         .foregroundColor(Color(hex: "#8E939C"))
@@ -1363,6 +2617,7 @@ struct IntegrationCardView: View {
             NSWorkspace.shared.openApplication(at: appURL, configuration: .init(), completionHandler: nil)
         }
     }
+
 }
 
 // MARK: - Vercel Deployment List View
@@ -1615,6 +2870,555 @@ struct ResendCardView: View {
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .padding(.top, 4)
+    }
+}
+
+// MARK: - GitHub Pulse Card View
+
+private func ciWorstState(_ prs: [GitHubPR]) -> CIState {
+    if prs.contains(where: { $0.ci == .failure }) { return .failure }
+    if prs.contains(where: { $0.ci == .pending }) { return .pending }
+    if prs.contains(where: { $0.ci == .success }) { return .success }
+    return .unknown
+}
+
+private func ciColor(_ state: CIState) -> String {
+    switch state {
+    case .failure: return "#F4505E"
+    case .pending: return "#F5A524"
+    case .success: return "#22C55E"
+    case .unknown: return "#6B7079"
+    }
+}
+
+private func mainCIWorst(_ repos: [GitHubRepoCI]) -> CIState {
+    if repos.contains(where: { $0.ci == .failure }) { return .failure }
+    if repos.contains(where: { $0.ci == .pending }) { return .pending }
+    if repos.contains(where: { $0.ci == .success }) { return .success }
+    return .unknown
+}
+
+struct GitHubPulseCardView: View {
+    let pulse: GitHubPulse
+    let stats: GitHubStats?
+    let activity: GitHubActivity?
+    let onTapSection: (GitHubDetailSection) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(Color(hex: "#F4505E"))
+                    .frame(width: 7, height: 7)
+                Text("GitHub")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(Color(hex: "#F5F6F8"))
+                if let s = stats {
+                    // Stars + 7-day mini-row → opens Activity detail
+                    Button(action: { onTapSection(.activity) }) {
+                        HStack(spacing: 4) {
+                            Text("★ \(formatCount(s.totalStars))")
+                                .font(.system(size: 11))
+                                .foregroundColor(Color(hex: "#8E939C"))
+                                .lineLimit(1)
+                            if let act = activity {
+                                HStack(spacing: 2) {
+                                    ForEach(act.lastDays(7), id: \.date) { day in
+                                        RoundedRectangle(cornerRadius: 1.5)
+                                            .fill(contributionColor(day.level))
+                                            .frame(width: 7, height: 7)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                } else if let act = activity {
+                    // No stats yet but activity loaded — show mini-row only
+                    Button(action: { onTapSection(.activity) }) {
+                        HStack(spacing: 2) {
+                            ForEach(act.lastDays(7), id: \.date) { day in
+                                RoundedRectangle(cornerRadius: 1.5)
+                                    .fill(contributionColor(day.level))
+                                    .frame(width: 7, height: 7)
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Text("Overview")
+                        .font(.system(size: 11))
+                        .foregroundColor(Color(hex: "#8E939C"))
+                }
+            }
+            .padding(.top, 6)
+            .padding(.leading, 108)
+            .padding(.trailing, 36)
+
+            // Stat rows
+            VStack(alignment: .leading, spacing: 4) {
+                // My PRs
+                let prWorst = ciWorstState(pulse.myPRs)
+                let prValue: String = {
+                    let n = pulse.myPRs.count
+                    if n == 0 { return "0" }
+                    let failing = pulse.myPRs.filter { $0.ci == .failure }.count
+                    let pending = pulse.myPRs.filter { $0.ci == .pending }.count
+                    if failing > 0 { return "\(n) · \(failing) failing" }
+                    if pending > 0 { return "\(n) · running" }
+                    return "\(n)"
+                }()
+                GitHubStatRow(
+                    icon: "arrow.triangle.pull", iconColor: ciColor(prWorst),
+                    label: String(localized: "My PRs"), value: prValue
+                ) { onTapSection(.myPRs) }
+
+                // To review
+                let reviewCount = pulse.toReview.count
+                GitHubStatRow(
+                    icon: "eye",
+                    iconColor: reviewCount > 0 ? "#8AB4F8" : "#6B7079",
+                    label: String(localized: "To review"),
+                    value: "\(reviewCount)"
+                ) { onTapSection(.toReview) }
+
+                // Default branch CI
+                let mainWorst = mainCIWorst(pulse.mainCI)
+                let (ciIcon, ciIconColor, ciValue): (String, String, String) = {
+                    switch mainWorst {
+                    case .failure:
+                        let n = pulse.mainCI.filter { $0.ci == .failure }.count
+                        return ("xmark.octagon.fill", "#F4505E", "\(n) failing")
+                    case .pending:
+                        return ("checkmark.seal.fill", "#F5A524", "running")
+                    case .success:
+                        return ("checkmark.seal.fill", "#22C55E", "all green")
+                    case .unknown:
+                        return ("checkmark.seal.fill", "#6B7079", pulse.mainCI.isEmpty ? "no repos" : "unknown")
+                    }
+                }()
+                GitHubStatRow(
+                    icon: ciIcon, iconColor: ciIconColor,
+                    label: "Default branch CI", value: ciValue
+                ) { onTapSection(.mainCI) }
+            }
+            .padding(.top, 6)
+            .padding(.leading, 108)
+            .padding(.trailing, 12)
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .padding(.top, 4)
+        .clipped()
+    }
+
+    private func formatCount(_ n: Int) -> String {
+        if n >= 1000 { return String(format: "%.1fk", Double(n) / 1000) }
+        return "\(n)"
+    }
+}
+
+private struct GitHubStatRow: View {
+    let icon: String
+    let iconColor: String
+    let label: String
+    let value: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 7) {
+                Image(systemName: icon)
+                    .font(.system(size: 10))
+                    .foregroundColor(Color(hex: iconColor))
+                    .frame(width: 14)
+                Text(label)
+                    .font(.system(size: 11))
+                    .foregroundColor(Color(hex: "#6B7079"))
+                Spacer()
+                Text(value)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(Color(hex: "#C5C8CD"))
+                    .monospacedDigit()
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - GitHub Detail View
+
+struct GitHubDetailView: View {
+    let section: GitHubDetailSection
+    let pulse: GitHubPulse
+    let activity: GitHubActivity?
+    let stats: GitHubStats?
+    let onBack: () -> Void
+    @ObservedObject private var appState = AppState.shared
+
+    private var title: String {
+        switch section {
+        case .myPRs:    return String(localized: "My PRs")
+        case .toReview: return String(localized: "To review")
+        case .mainCI:   return "Default branch CI"
+        case .activity: return String(localized: "Activity")
+        }
+    }
+
+    private var items: [GitHubPR] {
+        switch section {
+        case .myPRs:    return pulse.myPRs
+        case .toReview: return pulse.toReview
+        case .mainCI, .activity: return []
+        }
+    }
+
+    private var repoItems: [GitHubRepoCI] {
+        section == .mainCI ? pulse.mainCI : []
+    }
+
+    private var totalItems: Int { items.count + repoItems.count }
+
+    var body: some View {
+        if section == .activity {
+            GitHubActivityDetailContent(
+                activity: activity,
+                stats: stats,
+                login: pulse.login,
+                onBack: onBack
+            )
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                // Header
+                HStack(spacing: 6) {
+                    Button(action: onBack) {
+                        HStack(spacing: 3) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 8, weight: .medium))
+                            Text(title)
+                                .font(.system(size: 12, weight: .semibold))
+                        }
+                        .foregroundColor(Color(hex: "#F5F6F8"))
+                    }
+                    .buttonStyle(.plain)
+                    Spacer(minLength: 2)
+                }
+                .padding(.top, 6)
+                .padding(.leading, 108)
+                .padding(.trailing, 12)
+
+                // List
+                if items.isEmpty && repoItems.isEmpty {
+                    Text("Nothing here")
+                        .font(.system(size: 10.5))
+                        .foregroundColor(Color(hex: "#6B7079"))
+                        .padding(.top, 8)
+                        .padding(.leading, 108)
+                } else {
+                    ScrollView(.vertical, showsIndicators: false) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(items.enumerated()), id: \.element.id) { idx, pr in
+                                GitHubPRRowView(pr: pr, showCI: section == .myPRs,
+                                               selected: appState.cardSelection == idx)
+                            }
+                            ForEach(Array(repoItems.enumerated()), id: \.element.repo) { idx, repo in
+                                GitHubRepoCIRowView(repo: repo,
+                                                   selected: appState.cardSelection == items.count + idx)
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 60)  // 3 rows × 20 pt; rest scrolls
+                    .mask(
+                        Group {
+                            if totalItems > 3 {
+                                LinearGradient(
+                                    stops: [
+                                        .init(color: .black, location: 0),
+                                        .init(color: .black, location: 0.8),
+                                        .init(color: .clear,  location: 1.0)
+                                    ],
+                                    startPoint: .top, endPoint: .bottom
+                                )
+                            } else {
+                                Color.black
+                            }
+                        }
+                    )
+                    .padding(.top, 4)
+                    .padding(.leading, 108)
+                    .padding(.trailing, 8)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .padding(.top, 4)
+            .clipped()
+            .onAppear {
+                GithubPoller.shared.refreshIfStale()
+                appState.cardItemCount = totalItems
+            }
+            .onDisappear { appState.cardItemCount = 0 }
+            .onReceive(NotificationCenter.default.publisher(for: .islandActivateCardSelection)) { _ in
+                guard let sel = appState.cardSelection else { return }
+                if sel < items.count {
+                    let pr = items[sel]
+                    if let url = safeWebURL(pr.url), url.host == "github.com" {
+                        NSWorkspace.shared.open(url)
+                    }
+                } else {
+                    let repoIdx = sel - items.count
+                    guard repoIdx < repoItems.count else { return }
+                    let repo = repoItems[repoIdx]
+                    let actionsURL = repo.url.hasSuffix("/") ? repo.url + "actions" : repo.url + "/actions"
+                    if let url = safeWebURL(actionsURL), url.host == "github.com" {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+            }
+            .onExitCommand { onBack() }
+        }
+    }
+}
+
+// MARK: - GitHub Activity Detail
+
+private struct GitHubActivityDetailContent: View {
+    let activity: GitHubActivity?
+    let stats: GitHubStats?
+    let login: String
+    let onBack: () -> Void
+
+    @State private var hoveredDay: ContributionDay? = nil
+
+    // Dynamic grid: s=7pt, spacing=1.5pt; numWeeks = floor((202 + 1.5) / (7 + 1.5)) = 23
+    private let squareSize: CGFloat = 7
+    private let spacing: CGFloat = 1.5
+    private var numWeeks: Int { Int((202 + spacing) / (squareSize + spacing)) }
+
+    private var headerRight: String {
+        if let day = hoveredDay {
+            let label: String
+            switch day.count {
+            case 0:  label = String(localized: "No contributions")
+            case 1:  label = "1 contribution"
+            default: label = "\(day.count) contributions"
+            }
+            return "\(activityDateLabel(day.date)) · \(label)"
+        }
+        guard let act = activity else { return "" }
+        let total = activityTotalLabel(act.total)
+        if let s = stats { return "\(total) past year · \(s.totalRepos) repos" }
+        return "\(total) past year"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
+            HStack(spacing: 6) {
+                Button(action: onBack) {
+                    HStack(spacing: 3) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 8, weight: .medium))
+                        Text("Activity")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .foregroundColor(Color(hex: "#F5F6F8"))
+                }
+                .buttonStyle(.plain)
+                Spacer(minLength: 2)
+                if activity != nil {
+                    Button(action: {
+                        let urlStr = "https://github.com/\(login)"
+                        if let url = safeWebURL(urlStr), url.host == "github.com" {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }) {
+                        Text(headerRight)
+                            .font(.system(size: 11))
+                            .foregroundColor(Color(hex: "#8E939C"))
+                            .lineLimit(1)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.top, 6)
+            .padding(.leading, 108)
+            .padding(.trailing, 12)
+
+            // Grid
+            if let act = activity {
+                let weeks = act.lastWeeks(numWeeks)
+                HStack(alignment: .top, spacing: spacing) {
+                    ForEach(weeks.indices, id: \.self) { wi in
+                        VStack(spacing: spacing) {
+                            ForEach(0..<7, id: \.self) { dow in
+                                if let day = weeks[wi].first(where: { $0.weekday == dow }) {
+                                    RoundedRectangle(cornerRadius: 1.5)
+                                        .fill(contributionColor(day.level))
+                                        .frame(width: squareSize, height: squareSize)
+                                        .onHover { hovering in hoveredDay = hovering ? day : nil }
+                                        .onTapGesture {
+                                            hoveredDay = (hoveredDay?.date == day.date) ? nil : day
+                                        }
+                                } else {
+                                    Color.clear.frame(width: squareSize, height: squareSize)
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(.top, 5)
+                .padding(.leading, 108)
+                .padding(.trailing, 12)
+            } else {
+                Text("Loading…")
+                    .font(.system(size: 10.5))
+                    .foregroundColor(Color(hex: "#6B7079"))
+                    .padding(.top, 8)
+                    .padding(.leading, 108)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .padding(.top, 4)
+        .clipped()
+        .onAppear { GithubPoller.shared.refreshActivityIfStale() }
+        .onExitCommand { onBack() }
+    }
+
+    private func activityDateLabel(_ dateStr: String) -> String {
+        let parts = dateStr.split(separator: "-")
+        guard parts.count == 3,
+              let month = Int(parts[1]), month >= 1 && month <= 12,
+              let day   = Int(parts[2]) else { return dateStr }
+        let months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+        return "\(months[month - 1]) \(day)"
+    }
+
+    private func activityTotalLabel(_ n: Int) -> String {
+        let nf = NumberFormatter()
+        nf.numberStyle = .decimal
+        nf.locale = Locale(identifier: "en_US")
+        return nf.string(from: NSNumber(value: n)) ?? "\(n)"
+    }
+}
+
+private func contributionColor(_ level: Int) -> Color {
+    switch level {
+    case 1: return Color(hex: "#0E4429")
+    case 2: return Color(hex: "#006D32")
+    case 3: return Color(hex: "#26A641")
+    case 4: return Color(hex: "#39D353")
+    default: return Color.white.opacity(0.06)
+    }
+}
+
+private func ghCIDot(_ ci: CIState) -> Color {
+    switch ci {
+    case .failure: return Color(hex: "#F4505E")
+    case .pending: return Color(hex: "#F5A524")
+    case .success: return Color(hex: "#22C55E")
+    case .unknown: return Color.clear
+    }
+}
+
+private struct GitHubPRRowView: View {
+    let pr: GitHubPR
+    let showCI: Bool
+    var selected: Bool = false
+
+    var body: some View {
+        Button(action: {
+            if let url = safeWebURL(pr.url), url.host == "github.com" {
+                NSWorkspace.shared.open(url)
+            }
+        }) {
+            HStack(spacing: 5) {
+                if showCI {
+                    Circle()
+                        .fill(ghCIDot(pr.ci))
+                        .frame(width: 5, height: 5)
+                        .opacity(pr.ci == .unknown ? 0 : 1)
+                } else {
+                    Spacer().frame(width: 5)
+                }
+                Text("\(pr.repo.components(separatedBy: "/").last ?? pr.repo)#\(pr.number)")
+                    .font(.system(size: 10.5))
+                    .foregroundColor(Color(hex: "#9398A1"))
+                    .lineLimit(1)
+                Text(pr.title)
+                    .font(.system(size: 11))
+                    .foregroundColor(Color(hex: "#C5C8CD"))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                if pr.isDraft {
+                    Text("Draft")
+                        .font(.system(size: 9.5))
+                        .foregroundColor(Color(hex: "#6B7079"))
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: 20)
+            .overlay(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color.white.opacity(0.12))
+                    .opacity(selected ? 1 : 0)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct GitHubRepoCIRowView: View {
+    let repo: GitHubRepoCI
+    var selected: Bool = false
+
+    private var ciStateWord: String? {
+        switch repo.ci {
+        case .failure: return "failing"
+        case .pending: return "running"
+        case .success: return "passing"
+        case .unknown: return nil
+        }
+    }
+
+    var body: some View {
+        Button(action: {
+            let actionsURL = repo.url.hasSuffix("/") ? repo.url + "actions" : repo.url + "/actions"
+            if let url = safeWebURL(actionsURL), url.host == "github.com" {
+                NSWorkspace.shared.open(url)
+            }
+        }) {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(ghCIDot(repo.ci))
+                    .frame(width: 5, height: 5)
+                    .opacity(repo.ci == .unknown ? 0 : 1)
+                Text(repo.repo.components(separatedBy: "/").last ?? repo.repo)
+                    .font(.system(size: 10.5))
+                    .foregroundColor(Color(hex: "#9398A1"))
+                    .lineLimit(1)
+                Text(repo.branch)
+                    .font(.system(size: 11))
+                    .foregroundColor(Color(hex: "#C5C8CD"))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 4)
+                if let word = ciStateWord {
+                    Text(word)
+                        .font(.system(size: 10))
+                        .foregroundColor(ghCIDot(repo.ci))
+                        .lineLimit(1)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: 20)
+            .overlay(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color.white.opacity(0.12))
+                    .opacity(selected ? 1 : 0)
+            )
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -2124,7 +3928,7 @@ struct N8nDetailView: View {
 
     private var success: Bool  { task.state == .finished }
     private var accent: Color  { success ? Color(hex: "#22C55E") : Color(hex: "#F4505E") }
-    private var statusLabel: String { success ? "Success" : "Failed" }
+    private var statusLabel: String { success ? String(localized: "Success") : String(localized: "Failed") }
     private var detail: String? { task.steps.dropFirst().first }
 
     var body: some View {
@@ -2171,7 +3975,7 @@ struct N8nDetailView: View {
                 }
                 .frame(maxHeight: 88)
             } else {
-                Text(success ? "Completed successfully." : "No error details available.")
+                Text(success ? String(localized: "Completed successfully.") : String(localized: "No error details available."))
                     .font(.system(size: 11))
                     .foregroundColor(Color(hex: "#6B7079"))
             }
@@ -2188,6 +3992,7 @@ struct N8nDetailView: View {
 
 struct TickerView: View {
     let task: AgentTask?
+    var onDiffTap: ((Int) -> Void)? = nil
 
     @State private var rowA: String = "…"   // completed (above, left-shifted)
     @State private var rowB: String = "…"   // current (below) → animates diagonally up-left
@@ -2211,22 +4016,27 @@ struct TickerView: View {
     }
 
     var body: some View {
+        let isActive = task?.state == .thinking || task?.state == .working
+        let rowADiffTap: (() -> Void)? = rowA.parseDiffStep().map { dp in { onDiffTap?(dp.diffId) } }
+        let rowBDiffTap: (() -> Void)? = rowB.parseDiffStep().map { dp in { onDiffTap?(dp.diffId) } }
+
         ZStack(alignment: .topLeading) {
             Color.clear
 
             // Row A: completed row — always rendered at phase=1 + completedScale
-            TickerRowView(text: rowA, phase: 1.0)
+            // Row A never shows its shimmer (phase 1): it doesn't animate one either.
+            TickerRowView(text: rowA, phase: 1.0, isActive: isActive, shimmerPaused: true, onDiffTap: rowADiffTap)
                 .scaleEffect(completedScale, anchor: .leading)
                 .offset(x: -10, y: rowAOffset)
                 .opacity(rowAOpacity)
 
             // Row B: current step → animates diagonally up-left, phase 0→1, scale 1→completedScale
-            TickerRowView(text: rowB, phase: rowBPhase)
+            TickerRowView(text: rowB, phase: rowBPhase, isActive: isActive, onDiffTap: rowBDiffTap)
                 .scaleEffect(1 - rowBPhase * (1 - completedScale), anchor: .leading)
                 .offset(x: -rowBPhase * 10, y: rowBOffset)
 
             // Row C: incoming new step — slides in from below at phase=0
-            TickerRowView(text: rowC, phase: 0.0)
+            TickerRowView(text: rowC, phase: 0.0, isActive: isActive)
                 .offset(y: rowCOffset)
                 .opacity(rowCOpacity)
         }
@@ -2305,43 +4115,100 @@ struct TickerView: View {
 struct TickerRowView: View {
     let text: String
     let phase: Double   // 0 = current (shimmer, large), 1 = completed (dim, scaled down by caller)
+    var isActive: Bool = true
+    var shimmerPaused: Bool = false
+    var onDiffTap: (() -> Void)? = nil
 
     var body: some View {
-        HStack(spacing: 6) {
-            // Icon: chevron fades out first half, checkmark fades in second half
-            ZStack {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundColor(Color(hex: "#8E939C"))
-                    .opacity(max(0, 1 - phase * 2))
-                Image(systemName: "checkmark")
-                    .font(.system(size: 8, weight: .regular))
-                    .foregroundColor(Color(hex: "#454850"))
-                    .opacity(max(0, phase * 2 - 1))
-            }
-            .frame(width: 12, alignment: .center)
+        let chevronOpacity:   Double = isActive ? max(0, 1 - phase * 2)       : 0
+        let checkmarkOpacity: Double = isActive ? max(0, phase * 2 - 1)       : 1
+        let shimmerOpacity:   Double = isActive ? max(0, 1 - phase * 1.6)     : 0
+        let staticOpacity:    Double = isActive ? min(1, max(0, phase * 2 - 0.4)) : 1
+        let staticColor = (!isActive && phase < 0.5) ? Color(hex: "#C9CDD4") : Color(hex: "#6B7079")
 
-            // Text: shimmer fades out, dim completed text fades in (overlapping cross-fade)
-            ZStack(alignment: .leading) {
-                TickerShimmerText(text: text)
-                    .opacity(max(0, 1 - phase * 1.6))
-                Text(text)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(Color(hex: "#6B7079"))
-                    .lineLimit(1).truncationMode(.tail)
-                    .opacity(min(1, max(0, phase * 2 - 0.4)))
+        if let dp = text.parseDiffStep() {
+            HStack(spacing: 6) {
+                ZStack {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundColor(Color(hex: "#8E939C"))
+                        .opacity(chevronOpacity)
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 8, weight: .regular))
+                        .foregroundColor(Color(hex: "#454850"))
+                        .opacity(checkmarkOpacity)
+                }
+                .frame(width: 12, alignment: .center)
+                // Filename + counts
+                HStack(spacing: 0) {
+                    ZStack(alignment: .leading) {
+                        TickerShimmerText(text: dp.filename, paused: shimmerPaused || !isActive)
+                            .opacity(shimmerOpacity)
+                        Text(dp.filename)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(staticColor)
+                            .lineLimit(1).truncationMode(.tail)
+                            .opacity(staticOpacity)
+                    }
+                    if dp.added > 0 {
+                        Text(" +\(dp.added)")
+                            .font(.system(size: 10, weight: .medium).monospaced())
+                            .foregroundColor(Color(hex: "#22C55E"))
+                            .fixedSize()
+                    }
+                    if dp.removed > 0 {
+                        Text(" −\(dp.removed)")
+                            .font(.system(size: 10, weight: .medium).monospaced())
+                            .foregroundColor(Color(hex: "#F4505E"))
+                            .fixedSize()
+                    }
+                }
             }
+            .frame(height: 22, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture { onDiffTap?() }
+        } else {
+            HStack(spacing: 6) {
+                // Icon: chevron fades out first half, checkmark fades in second half
+                ZStack {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundColor(Color(hex: "#8E939C"))
+                        .opacity(chevronOpacity)
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 8, weight: .regular))
+                        .foregroundColor(Color(hex: "#454850"))
+                        .opacity(checkmarkOpacity)
+                }
+                .frame(width: 12, alignment: .center)
+
+                // Text: shimmer fades out, dim completed text fades in (overlapping cross-fade)
+                ZStack(alignment: .leading) {
+                    // An idle task never shows the shimmer (nor row A, see shimmerPaused).
+                    TickerShimmerText(text: text, paused: shimmerPaused || !isActive)
+                        .opacity(shimmerOpacity)
+                    Text(text)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(staticColor)
+                        .lineLimit(1).truncationMode(.tail)
+                        .opacity(staticOpacity)
+                }
+            }
+            .frame(height: 22, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(height: 22, alignment: .leading)
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
 struct TickerShimmerText: View {
     let text: String
+    var paused: Bool = false
+    @Environment(\.islandViewActive) private var viewActive
 
     var body: some View {
-        TimelineView(.animation) { tl in
+        // A 2.2 s sweep at display refresh rate. Paused when hidden.
+        TimelineView(.animation(paused: paused || !viewActive)) { tl in
             let t = tl.date.timeIntervalSinceReferenceDate
             let p = CGFloat(t.truncatingRemainder(dividingBy: 2.2) / 2.2)
             // phase sweeps -0.1 → 1.1 so white peak enters from left and exits right
@@ -2383,12 +4250,37 @@ struct AgentPillsView: View {
             Spacer(minLength: 0)
             LazyVGrid(columns: columns, spacing: 4) {
                 ForEach(displayTasks) { task in
+                    #if !APPSTORE
+                    if task.id == "integration_music" {
+                        MusicPill(task: task, state: state, swapping: $swapping) {
+                            swapping = true
+                            state.setFocus(task.id)
+                            SoundEngine.shared.play("blip")
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { swapping = false }
+                        }
+                    } else if task.id == "integration_spotify" {
+                        SpotifyPill(task: task, swapping: $swapping) {
+                            swapping = true
+                            state.setFocus(task.id)
+                            SoundEngine.shared.play("blip")
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { swapping = false }
+                        }
+                    } else {
+                        AgentPill(task: task, state: state, swapping: $swapping) {
+                            swapping = true
+                            state.setFocus(task.id)
+                            SoundEngine.shared.play("blip")
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { swapping = false }
+                        }
+                    }
+                    #else
                     AgentPill(task: task, state: state, swapping: $swapping) {
                         swapping = true
                         state.setFocus(task.id)
                         SoundEngine.shared.play("blip")
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { swapping = false }
                     }
+                    #endif
                 }
             }
             .padding(.horizontal, 8)
@@ -2405,9 +4297,11 @@ struct AgentPill: View {
     let onTap: () -> Void
     @State private var isHovered = false
 
-    // VS Code pill always shows "VS Code" label regardless of active project name
+    private var effectiveColor: String { task.color }
+
+    // The Claude pill shows "VS Code" (or "Claude Code" for a terminal session) regardless of project name
     private var displayName: String {
-        task.id == "integration_claude" ? "VS Code" : task.name
+        task.id == "integration_claude" ? ClaudeHost.pillName(hostApp: task.hostApp) : task.name
     }
 
     var body: some View {
@@ -2416,10 +4310,10 @@ struct AgentPill: View {
                 ZStack {
                     Capsule()
                         .fill(isHovered
-                              ? Color(hex: task.color).opacity(0.18)
+                              ? Color(hex: effectiveColor).opacity(0.18)
                               : Color(hex: "#0E0F11"))
                     Capsule()
-                        .stroke(Color(hex: task.color).opacity(isHovered ? 0.55 : 0.14), lineWidth: 1)
+                        .stroke(Color(hex: effectiveColor).opacity(isHovered ? 0.55 : 0.14), lineWidth: 1)
                     HStack(spacing: 0) {
                         MiniBotCanvasView(task: task)
                             .frame(width: 22 / 0.6, height: 22 / 0.6)
@@ -2430,7 +4324,7 @@ struct AgentPill: View {
                     Text(displayName)
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundColor(isHovered
-                                         ? Color(hex: task.color).lighter(by: 0.3)
+                                         ? Color(hex: effectiveColor).lighter(by: 0.3)
                                          : Color(hex: "#6B7079"))
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -2438,11 +4332,11 @@ struct AgentPill: View {
                 }
                 .frame(maxWidth: .infinity)
                 .frame(height: 28)
-                .shadow(color: Color(hex: task.color).opacity(isHovered ? 0.35 : 0), radius: 10, x: 0, y: 2)
+                .shadow(color: Color(hex: effectiveColor).opacity(isHovered ? 0.35 : 0), radius: 10, x: 0, y: 2)
 
                 // Alert badge (approval / finished / error)
                 if let badge = task.pillBadge {
-                    PillBadgeView(badge: badge, taskColor: task.color)
+                    PillBadgeView(badge: badge, taskColor: effectiveColor)
                         .offset(x: 3, y: -3)
                 }
             }
@@ -2456,6 +4350,209 @@ struct AgentPill: View {
         }
     }
 }
+
+// MARK: - Music Pill (GitHub build only)
+
+#if !APPSTORE
+struct MusicPill: View {
+    let task: AgentTask
+    @ObservedObject var state: AppState
+    @Binding var swapping: Bool
+    let onTap: () -> Void
+    @State private var isHovered = false
+
+    private var isPlaying: Bool { AppState.shared.musicPlaying }
+    private var showControls: Bool { isHovered && MusicController.shared.trackTitle != nil }
+
+    var body: some View {
+        ZStack {
+            // Selection target — full pill area, receives taps where controls don't
+            Capsule()
+                .fill(Color.clear)
+                .contentShape(Capsule())
+                .onTapGesture { onTap() }
+
+            // Visual fills
+            Capsule()
+                .fill(isHovered ? Color(hex: task.color).opacity(0.18) : Color(hex: "#0E0F11"))
+                .allowsHitTesting(false)
+            Capsule()
+                .stroke(Color(hex: task.color).opacity(isHovered ? 0.55 : 0.14), lineWidth: 1)
+                .allowsHitTesting(false)
+
+            // Mini Mochi at leading edge
+            HStack(spacing: 0) {
+                MiniBotCanvasView(task: task, isDancing: isPlaying)
+                    .frame(width: 22 / 0.6, height: 22 / 0.6)
+                    .frame(width: 22, height: 22, alignment: .center)
+                    .padding(.leading, 8)
+                Spacer()
+            }
+            .allowsHitTesting(false)
+
+            // Title — trailing padding grows on hover to make room for buttons
+            Text(task.name)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(isHovered ? Color(hex: task.color).lighter(by: 0.3) : Color(hex: "#6B7079"))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .padding(.leading, 34)
+                .padding(.trailing, showControls ? 52 : 10)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .animation(.spring(response: 0.2, dampingFraction: 0.7), value: showControls)
+                .allowsHitTesting(false)
+
+            // Playback controls — appear on hover when a track is loaded
+            if showControls {
+                HStack(spacing: 0) {
+                    Spacer()
+                    HStack(spacing: 2) {
+                        MusicControlButton(icon: isPlaying ? "pause.fill" : "play.fill", color: task.color) {
+                            MusicController.shared.playPause()
+                        }
+                        MusicControlButton(icon: "forward.fill", color: task.color) {
+                            MusicController.shared.nextTrack()
+                        }
+                    }
+                    .padding(.trailing, 4)
+                }
+                .transition(.opacity.combined(with: .scale(scale: 0.85, anchor: .trailing)))
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 28)
+        .shadow(color: Color(hex: task.color).opacity(isHovered ? 0.35 : 0), radius: 10, x: 0, y: 2)
+        .scaleEffect(isHovered ? 1.04 : 1.0)
+        .brightness(isHovered ? 0.06 : 0)
+        .onHover { newHover in
+            guard !swapping else { return }
+            withAnimation(.spring(response: 0.2, dampingFraction: 0.7)) { isHovered = newHover }
+        }
+    }
+}
+
+struct MusicControlButton: View {
+    let icon: String
+    let color: String
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                Circle()
+                    .fill(isHovered ? Color(hex: color).opacity(0.18) : Color(hex: "#0E0F11"))
+                Circle()
+                    .stroke(Color(hex: color).opacity(isHovered ? 0.55 : 0.14), lineWidth: 1)
+                Image(systemName: icon)
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundColor(isHovered ? Color(hex: color).lighter(by: 0.3) : Color(hex: "#6B7079"))
+            }
+            .frame(width: 20, height: 20)
+            .shadow(color: Color(hex: color).opacity(isHovered ? 0.35 : 0), radius: 6)
+        }
+        .buttonStyle(.plain)
+        .scaleEffect(isHovered ? 1.1 : 1.0)
+        .onHover { newHover in
+            withAnimation(.spring(response: 0.2, dampingFraction: 0.7)) { isHovered = newHover }
+        }
+    }
+}
+#endif
+
+// MARK: - Music Card View (GitHub build only)
+
+#if !APPSTORE
+struct MusicCardView: View {
+    @ObservedObject private var controller = MusicController.shared
+    @ObservedObject private var appState = AppState.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if appState.musicAutomationDenied {
+                // Automation denied — prompt user to fix
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(Color(hex: "#F4505E"))
+                        .frame(width: 7, height: 7)
+                    Text("Apple Music")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(Color(hex: "#F5F6F8"))
+                    Spacer(minLength: 2)
+                }
+                .padding(.top, 6)
+                .padding(.leading, 108)
+                .padding(.trailing, 36)
+
+                Text("Allow Coucou to control Music")
+                    .font(.system(size: 11))
+                    .foregroundColor(Color(hex: "#8E939C"))
+                    .padding(.leading, 108)
+                    .padding(.trailing, 12)
+
+                Button("Open Settings…") { MusicController.shared.openAutomationSettings() }
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(Color(hex: "#FA2D48").opacity(0.85))
+                    .buttonStyle(.plain)
+                    .padding(.leading, 108)
+                    .padding(.top, 2)
+            } else {
+                // Line 1: dot + title
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(Color(hex: "#FA2D48"))
+                        .frame(width: 7, height: 7)
+                    if let title = controller.trackTitle {
+                        Text(title)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(Color(hex: "#F5F6F8"))
+                            .lineLimit(1).truncationMode(.tail)
+                            .frame(maxWidth: 150, alignment: .leading)
+                    }
+                }
+                .padding(.top, 6)
+                .padding(.leading, 108)
+
+                // Line 2: artist
+                if let artist = controller.artist {
+                    Text(artist)
+                        .font(.system(size: 11))
+                        .foregroundColor(Color(hex: "#8E939C"))
+                        .lineLimit(1).truncationMode(.tail)
+                        .frame(maxWidth: 150, alignment: .leading)
+                        .padding(.leading, 108)
+                }
+
+                // Line 3: controls
+                HStack(spacing: 8) {
+                    Button(action: { MusicController.shared.previousTrack() }) {
+                        Image(systemName: "backward.fill")
+                            .font(.system(size: 11))
+                            .foregroundColor(Color(hex: "#8E939C"))
+                    }
+                    .buttonStyle(.plain)
+                    Button(action: { MusicController.shared.playPause() }) {
+                        Image(systemName: appState.musicPlaying ? "pause.fill" : "play.fill")
+                            .font(.system(size: 11))
+                            .foregroundColor(Color(hex: "#FA2D48"))
+                    }
+                    .buttonStyle(.plain)
+                    Button(action: { MusicController.shared.nextTrack() }) {
+                        Image(systemName: "forward.fill")
+                            .font(.system(size: 11))
+                            .foregroundColor(Color(hex: "#8E939C"))
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.leading, 108)
+                .padding(.top, 6)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .padding(.top, 4)
+    }
+}
+#endif
 
 struct PillBadgeView: View {
     let badge: PillBadge
@@ -2515,6 +4612,278 @@ struct ColumnAgentsView: View {
     }
 }
 
+// MARK: - Wardrobe
+
+struct WardrobeView: View {
+    @ObservedObject var state: AppState
+    @State private var hoveredOutfit: Outfit? = nil
+
+    private let columns = Array(repeating: GridItem(.fixed(30), spacing: 5), count: 14)
+
+    private var headerRight: String {
+        // Hover takes priority: show hovered outfit name
+        if let h = hoveredOutfit {
+            if h == .auto {
+                let seasonal = Outfit.seasonal(for: Date(), calendar: .current)
+                let name = seasonal == .none ? "None" : seasonal.displayName
+                return "Auto · follows the seasons (now: \(name))"
+            }
+            return h.displayName
+        }
+        // Fall back to current selection
+        let sel = state.mochiOutfitSelection
+        if sel == .auto {
+            let seasonal = Outfit.seasonal(for: Date(), calendar: .current)
+            let name = seasonal == .none ? "None" : seasonal.displayName
+            return "Auto · \(name)"
+        }
+        return sel.displayName
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
+            HStack(spacing: 6) {
+                Text("Wardrobe")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(Color(hex: "#F5F6F8"))
+                Spacer(minLength: 4)
+                Text(headerRight)
+                    .font(.system(size: 11))
+                    .foregroundColor(Color(hex: "#8E939C"))
+                    .lineLimit(1)
+            }
+            .padding(.top, 6)
+            .padding(.horizontal, 10)
+
+            // Grid
+            let allOutfits = Outfit.allCases.filter { $0 != .auto }
+            let withAuto = [Outfit.auto] + allOutfits
+            ScrollView(.vertical, showsIndicators: false) {
+                LazyVGrid(columns: columns, spacing: 5) {
+                    ForEach(withAuto, id: \.rawValue) { outfit in
+                        OutfitPillView(
+                            outfit: outfit,
+                            isSelected: state.mochiOutfitSelection == outfit,
+                            isHovered: hoveredOutfit == outfit,
+                            onHover: { h in
+                                hoveredOutfit = h ? outfit : nil
+                                if h {
+                                    // Preview on main Mochi
+                                    let preview: Outfit = outfit == .auto
+                                        ? Outfit.seasonal(for: Date(), calendar: .current)
+                                        : outfit
+                                    state.wardrobePreviewOutfit = preview
+                                } else if hoveredOutfit == nil {
+                                    state.wardrobePreviewOutfit = nil
+                                }
+                            },
+                            onTap: {
+                                guard state.mochiOutfitSelection != outfit else { return }
+                                state.mochiOutfitSelection = outfit
+                                SoundEngine.shared.play("pop")
+                                NotificationCenter.default.post(name: .triggerEmote, object: BotEmote.proud)
+                            },
+                            seasonalOutfit: outfit == .auto ? state.resolvedOutfit : .none
+                        )
+                    }
+                }
+                .padding(.vertical, 6)
+                .padding(.horizontal, 8)
+            }
+            .frame(maxHeight: .infinity)
+            .mask(
+                LinearGradient(
+                    stops: [
+                        .init(color: .white, location: 0),
+                        .init(color: .white, location: 0.85),
+                        .init(color: .clear, location: 1)
+                    ],
+                    startPoint: .top, endPoint: .bottom
+                )
+            )
+        }
+        .padding(.leading, 108)
+        .padding(.trailing, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onDisappear {
+            state.wardrobePreviewOutfit = nil
+            hoveredOutfit = nil
+        }
+        .onExitCommand {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                state.view = .overview
+            }
+        }
+    }
+}
+
+struct OutfitPillView: View {
+    let outfit: Outfit
+    let isSelected: Bool
+    let isHovered: Bool
+    let onHover: (Bool) -> Void
+    let onTap: () -> Void
+    var seasonalOutfit: Outfit = .none
+
+    var body: some View {
+        Canvas { context, size in
+            drawOutfitIcon(context: context, size: size, outfit: outfit, seasonal: seasonalOutfit)
+        }
+        .frame(width: 30, height: 30)
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(isHovered ? Color.white.opacity(0.10) : Color.white.opacity(0.06))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(isSelected ? Color.white.opacity(0.40) : Color.white.opacity(0.08), lineWidth: 1)
+        )
+        .onHover { onHover($0) }
+        .onTapGesture { onTap() }
+    }
+}
+
+private func drawOutfitIcon(context: GraphicsContext, size: CGSize, outfit: Outfit, seasonal: Outfit = .none) {
+    let W = size.width, H = size.height
+    let cx = W / 2, cy = H / 2
+    let R: CGFloat = 6.5   // small scale for icon
+
+    switch outfit {
+    case .auto:
+        let iconR: CGFloat = 10.0
+        let rx = iconR * 1.14, ry = iconR * 0.88
+        let mH = MochiH(R: iconR, yaw: 0, pitch: 0)
+        let bodyPath = mochiOutfitPath(rx, ry)
+        let iconCY = cy + iconR * 0.62
+
+        // Draw the seasonal outfit behind body
+        if seasonal != .none && seasonal != .auto {
+            drawOutfitBehindStatic(context: context, outfit: seasonal, H: mH,
+                                   cx: cx, cy: iconCY, tilt: 0, sx: 1, sy: 1,
+                                   roll: 0, morph: 0, isMini: false)
+        }
+        // Body
+        var ctx = context
+        ctx.translateBy(x: cx, y: iconCY)
+        ctx.fill(bodyPath, with: .linearGradient(
+            Gradient(colors: [Color(red: 0.929, green: 0.929, blue: 0.937),
+                              Color(red: 0.769, green: 0.773, blue: 0.792)]),
+            startPoint: CGPoint(x: rx*0.7, y: -ry*0.85),
+            endPoint:   CGPoint(x: -rx*0.8, y: ry*0.9)
+        ))
+        ctx.fill(bodyPath, with: .radialGradient(
+            Gradient(stops: [.init(color: .clear, location: 0.6),
+                             .init(color: Color.black.opacity(0.2), location: 1)]),
+            center: .zero, startRadius: iconR*0.15, endRadius: iconR*1.25
+        ))
+        // Eyes
+        var eyeCtx = ctx; eyeCtx.clip(to: bodyPath)
+        let ink = Color(red: 0.102, green: 0.082, blue: 0.071)
+        for f in mEyeFrames(mH) {
+            guard f.visible else { continue }
+            var ec = eyeCtx; ec.translateBy(x: f.x, y: f.y); ec.scaleBy(x: f.fx, y: f.fy)
+            let hh = max(f.h, f.w*0.3)
+            var pill = Path()
+            pill.addRoundedRect(in: CGRect(x: -f.w/2, y: -hh/2, width: f.w, height: hh),
+                                cornerSize: CGSize(width: min(f.w/2,hh/2), height: min(f.w/2,hh/2)))
+            ec.fill(pill, with: .color(ink))
+        }
+        // Front outfit
+        if seasonal != .none && seasonal != .auto {
+            drawOutfitFrontStatic(context: context, outfit: seasonal, H: mH,
+                                  cx: cx, cy: iconCY, tilt: 0, sx: 1, sy: 1,
+                                  roll: 0, morph: 0, isMini: false)
+        }
+        // AUTO badge at bottom
+        var badgeCtx = context
+        let badgeCY = iconCY + ry * 0.72
+        badgeCtx.translateBy(x: cx, y: badgeCY)
+        let bw: CGFloat = 14, bh: CGFloat = 6.5
+        var badge = Path()
+        badge.addRoundedRect(in: CGRect(x: -bw/2, y: -bh/2, width: bw, height: bh),
+                             cornerSize: CGSize(width: bh/2, height: bh/2))
+        badgeCtx.fill(badge, with: .color(Color.black.opacity(0.60)))
+        badgeCtx.draw(Text("AUTO").font(.system(size: 4.2, weight: .semibold)).foregroundColor(.white),
+                      at: .zero)
+
+    case .none:
+        var ctx = context
+        ctx.translateBy(x: cx, y: cy)
+        // Circle with diagonal slash (⊘)
+        var circle = Path()
+        circle.addEllipse(in: CGRect(x: -R * 0.82, y: -R * 0.82, width: R * 1.64, height: R * 1.64))
+        ctx.stroke(circle, with: .color(Color(hex: "#454850")), style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
+        var slash = Path()
+        slash.move(to:    CGPoint(x: -R * 0.56, y:  R * 0.56))
+        slash.addLine(to: CGPoint(x:  R * 0.56, y: -R * 0.56))
+        ctx.stroke(slash, with: .color(Color(hex: "#454850")), style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
+
+    default:
+        // Small Mochi wearing the outfit
+        let iconR: CGFloat = 10.0
+        let rx = iconR * 1.14, ry = iconR * 0.88
+        let mH = MochiH(R: iconR, yaw: 0, pitch: 0)
+        let bodyPath = mochiOutfitPath(rx, ry)
+        let iconCY = cy + iconR * 0.62
+
+        // Draw outfit behind
+        drawOutfitBehindStatic(context: context, outfit: outfit, H: mH,
+                               cx: cx, cy: iconCY, tilt: 0, sx: 1, sy: 1,
+                               roll: 0, morph: 0, isMini: false)
+
+        // Draw body
+        var ctx = context
+        ctx.translateBy(x: cx, y: iconCY)
+        let pumpkin = outfit == .pumpkin
+        let top = pumpkin ? Color(hex: "#FFA94D") : Color(red: 0.929, green: 0.929, blue: 0.937)
+        let bot = pumpkin ? Color(hex: "#E8590C") : Color(red: 0.769, green: 0.773, blue: 0.792)
+        ctx.fill(bodyPath, with: .linearGradient(
+            Gradient(colors: [top, bot]),
+            startPoint: CGPoint(x: rx * 0.7, y: -ry * 0.85),
+            endPoint:   CGPoint(x: -rx * 0.8, y: ry * 0.9)
+        ))
+        ctx.fill(bodyPath, with: .radialGradient(
+            Gradient(stops: [
+                .init(color: .clear, location: 0),
+                .init(color: .clear, location: 0.6),
+                .init(color: Color.black.opacity(0.2), location: 1)
+            ]),
+            center: .zero, startRadius: iconR * 0.15, endRadius: iconR * 1.25
+        ))
+        ctx.fill(bodyPath, with: .radialGradient(
+            Gradient(stops: [
+                .init(color: Color.white.opacity(0.55), location: 0),
+                .init(color: .clear, location: 1)
+            ]),
+            center: CGPoint(x: rx * 0.34, y: -ry * 0.46),
+            startRadius: 0, endRadius: iconR * 0.42
+        ))
+
+        // Draw eyes
+        var eyeCtx = ctx
+        eyeCtx.clip(to: bodyPath)
+        let ink = Color(red: 0.102, green: 0.082, blue: 0.071)
+        for f in mEyeFrames(mH) {
+            guard f.visible else { continue }
+            var ec = eyeCtx
+            ec.translateBy(x: f.x, y: f.y)
+            ec.scaleBy(x: f.fx, y: f.fy)
+            let hh = max(f.h, f.w * 0.3)
+            var pill = Path()
+            pill.addRoundedRect(
+                in: CGRect(x: -f.w / 2, y: -hh / 2, width: f.w, height: hh),
+                cornerSize: CGSize(width: min(f.w / 2, hh / 2), height: min(f.w / 2, hh / 2))
+            )
+            ec.fill(pill, with: .color(ink))
+        }
+
+        // Draw outfit front
+        drawOutfitFrontStatic(context: context, outfit: outfit, H: mH,
+                              cx: cx, cy: iconCY, tilt: 0, sx: 1, sy: 1,
+                              roll: 0, morph: 0, isMini: false)
+    }
+}
 // MARK: - Card background
 
 struct CardBackground<Content: View>: View {
@@ -2620,7 +4989,7 @@ struct AgentWho: View {
                 Circle().fill(Color(hex: task.color)).frame(width: 8, height: 8)
                 Text(task.name).font(.system(size: 12, weight: .semibold)).foregroundColor(Color(hex: "#F5F6F8"))
             }
-            Text(label).font(.system(size: 12)).foregroundColor(Color(hex: "#8E939C"))
+            Text(LocalizedStringKey(label)).font(.system(size: 12)).foregroundColor(Color(hex: "#8E939C"))
         }
     }
 }
@@ -2743,17 +5112,24 @@ struct ShimmerOverlay: View {
 
 struct PrimaryButton: View {
     let title: String
+    let verbatim: Bool
     let kbd: String?
     let action: () -> Void
 
     init(_ title: String, kbd: String? = nil, action: @escaping () -> Void) {
-        self.title = title; self.kbd = kbd; self.action = action
+        self.title = title; self.verbatim = false; self.kbd = kbd; self.action = action
+    }
+
+    init(verbatim title: String, kbd: String? = nil, action: @escaping () -> Void) {
+        self.title = title; self.verbatim = true; self.kbd = kbd; self.action = action
     }
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 7) {
-                Text(title).font(.system(size: 12.5, weight: .medium))
+                Group {
+                    if verbatim { Text(verbatim: title) } else { Text(LocalizedStringKey(title)) }
+                }.font(.system(size: 12.5, weight: .medium))
                 if let k = kbd {
                     Text(k).font(.system(size: 10.5))
                         .padding(.horizontal, 4)
@@ -2772,17 +5148,24 @@ struct PrimaryButton: View {
 
 struct SecondaryButton: View {
     let title: String
+    let verbatim: Bool
     let kbd: String?
     let action: () -> Void
 
     init(_ title: String, kbd: String? = nil, action: @escaping () -> Void) {
-        self.title = title; self.kbd = kbd; self.action = action
+        self.title = title; self.verbatim = false; self.kbd = kbd; self.action = action
+    }
+
+    init(verbatim title: String, kbd: String? = nil, action: @escaping () -> Void) {
+        self.title = title; self.verbatim = true; self.kbd = kbd; self.action = action
     }
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 7) {
-                Text(title).font(.system(size: 12.5, weight: .medium))
+                Group {
+                    if verbatim { Text(verbatim: title) } else { Text(LocalizedStringKey(title)) }
+                }.font(.system(size: 12.5, weight: .medium))
                 if let k = kbd {
                     Text(k).font(.system(size: 10.5))
                         .padding(.horizontal, 4)
@@ -2839,14 +5222,14 @@ struct SettingsIslandView: View {
     }
 
     private var apiConnected: Bool {
-        if state.chatProvider == "grok" {
+        if state.chatProvider == .grok {
             return KeychainStore.shared.get("xai-api-key") != nil
         }
         return KeychainStore.shared.get("anthropic-api-key") != nil
     }
 
     private var apiLabel: String {
-        state.chatProvider == "grok" ? "Grok" : "API"
+        state.chatProvider == .grok ? "Grok" : "API"
     }
 
     var body: some View {
@@ -2874,7 +5257,7 @@ struct SettingsIslandView: View {
                         .font(.system(size: 12))
                         .foregroundColor(Color(hex: "#8E939C"))
                         .frame(width: 16)
-                    Text("Auto-close · \(Int(state.autoCloseInterval))s")
+                    Text(String(format: String(localized: "Auto-close · %llds"), Int64(state.autoCloseInterval)))
                         .font(.system(size: 12))
                         .foregroundColor(Color(hex: "#C5C8CD"))
                     Spacer()
@@ -2930,6 +5313,23 @@ struct StatusBadge: View {
 }
 
 // MARK: - Color extension (lighten)
+
+// MARK: - Chat-provider switch (used by AI pill buttons and ↗ action)
+
+/// Mirrors ModelPickerView provider-chip tap: animates, fires surprised emote + "pop" sound,
+/// then opens the chat view. No-op if provider is already selected (just opens chat).
+@MainActor
+func switchChatProvider(_ provider: ChatProvider) {
+    let state = AppState.shared
+    if provider != state.chatProvider {
+        withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
+            state.chatProvider = provider
+        }
+        NotificationCenter.default.post(name: .triggerEmote, object: BotEmote.surprised)
+        SoundEngine.shared.play("pop")
+    }
+    state.view = .prompt
+}
 
 extension Color {
     func lighter(by amount: Double) -> Color {

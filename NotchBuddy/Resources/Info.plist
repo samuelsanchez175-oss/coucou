@@ -12,18 +12,36 @@
 	<string>fr.louisraille.NotchBuddy</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>en</string>
+		<string>ar</string>
+		<string>bn</string>
+		<string>es</string>
+		<string>fr</string>
+		<string>hi</string>
+		<string>id</string>
+		<string>pt-BR</string>
+		<string>ru</string>
+		<string>zh-Hans</string>
+	</array>
 	<key>CFBundleName</key>
 	<string>Coucou</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.1</string>
+	<string>0.3.0</string>
 	<key>CFBundleVersion</key>
-	<string>2</string>
+	<string>15</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAccessibilityUsageDescription</key>
 	<string>Coucou reads the front window for the notch, and uses the volume and brightness keys so those changes can show in the notch.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Coucou asks Chrome or Safari to float the playing video, asks Terminal to run a line, and asks Logic Pro to split a song into stems.</string>
 	<key>NSAppleMusicUsageDescription</key>
@@ -36,10 +54,16 @@
 	<string>Coucou lists your calendars so you can choose which events appear in the notch.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Coucou shows your front camera in the Mirror circle.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Coucou looks up an email address when you ask it, by voice, to prepare an email.</string>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>Coucou shows the playing video in a floating picture on the desktop you are already using.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Coucou uses the microphone when you dictate a message in the chat.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Coucou turns your voice into the text of a chat message.</string>
 	<key>NSSupportsAutomaticGraphicsSwitching</key>
 	<true/>
 </dict>

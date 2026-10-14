@@ -684,7 +684,7 @@ enum NookLayoutTests {
 
     static func testTrayIsItsOwnPage() {
         let types = sourceSlice(
-            file: "NotchBuddy/Sources/App/IslandTypes.swift",
+            file: "NotchBuddy/Sources/CoucouKit/IslandTypes.swift",
             from: "enum IslandView",
             until: "enum BotState"
         )

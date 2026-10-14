@@ -31,6 +31,8 @@ struct IslandContainer: View {
     @ObservedObject private var prefs = NookPreferences.shared
     @ObservedObject private var board = NookBoard.shared
     @ObservedObject private var hud = HudController.shared
+
+    @ObservedObject private var demoEngine = DemoEngine.shared
     @State private var islandWidth:  CGFloat = IslandConst.notchWidth
     @State private var islandHeight: CGFloat = IslandConst.notchHeight
     @State private var cornerRadius: CGFloat = IslandConst.roundedCorner
@@ -253,6 +255,14 @@ struct IslandContainer: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .botGreet)) { _ in
             greetNotif.toggle()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .islandScreenChanged)) { _ in
+            // New screen, new resting size (notch ↔ bar): snap without animation.
+            let (w, h) = islandSize(mode: state.mode, view: state.view,
+                                    progress: state.uploadProgress,
+                                    nw: state.notchWidth, nh: state.notchHeight)
+            islandWidth  = w
+            islandHeight = (state.mode == .expanded && state.view == .prompt) ? chatPromptHeight : h
         }
     }
 
@@ -607,16 +617,17 @@ struct BotPlacement: View {
                     let t = min(1.0, max(0, elapsed / state.uploadDuration))
                     // cx = 36 + 526*t: bot center at fill right edge (bar left=36, width=526)
                     let uploadCx = 36 + CGFloat(t * (2 - t)) * 526
-                    BotCanvasView(state: state, particleOverhang: 0)
+                    BotCanvasView(state: state, particleOverhang: 0, paused: state.mochiOnDesktop)
                         .frame(width: canvasSize, height: canvasSize)
-                        .opacity(state.isDraggingBot ? 0 : opacity)
+                        .opacity(state.isDraggingBot || state.mochiOnDesktop ? 0 : opacity)
                         .position(x: uploadCx, y: cy)
                 }
                 .transition(.scale(scale: 0.01, anchor: .center).combined(with: .opacity))
             } else {
-                BotCanvasView(state: state, particleOverhang: overhang)
+                // Invisible while Mochi lives on the desktop: no drawing either.
+                BotCanvasView(state: state, particleOverhang: overhang, paused: state.mochiOnDesktop)
                     .frame(width: canvasSize, height: canvasSize + overhang)
-                    .opacity(state.isDraggingBot ? 0 : opacity)
+                    .opacity(state.isDraggingBot || state.mochiOnDesktop ? 0 : opacity)
                     .position(x: cx, y: cy - overhang / 2)
                     .animation(.spring(response: 0.5, dampingFraction: 0.72), value: cx)
                     .animation(.spring(response: 0.5, dampingFraction: 0.72), value: cy)
@@ -765,6 +776,21 @@ private struct DrawerPullTab: View {
     }
 }
 
+// MARK: - Active island view
+
+private struct IslandViewActiveKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
+extension EnvironmentValues {
+    /// False inside the island views that are mounted but not shown (opacity 0):
+    /// TimelineViews in them pause. True everywhere else.
+    var islandViewActive: Bool {
+        get { self[IslandViewActiveKey.self] }
+        set { self[IslandViewActiveKey.self] = newValue }
+    }
+}
+
 // MARK: - Countdown bar
 
 struct CountdownBar: View {
@@ -781,29 +807,46 @@ struct CountdownBar: View {
                 .cornerRadius(2)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         }
-        .onAppear { startTimer() }
-        .onDisappear { timer?.invalidate() }
+        // The bar only exists in the open island: its 10 Hz timer runs only then
+        // (CLAUDE.md: 0 % CPU when the island is hidden).
+        .onAppear { if state.mode == .expanded { startTimer() } }
+        .onChange(of: state.mode) { _, mode in
+            if mode == .expanded { startTimer() } else { stopTimer() }
+        }
+        .onDisappear { stopTimer() }
     }
 
     private func startTimer() {
-        timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
-            updateBar()
+        guard timer == nil else { return }
+        let t = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
+            MainActor.assumeIsolated { updateBar() }
         }
+        t.tolerance = 0.02
+        timer = t
+    }
+
+    private func stopTimer() {
+        timer?.invalidate()
+        timer = nil
+        if barWidth != 0 { barWidth = 0 }
     }
 
     private func updateBar() {
         guard state.mode == .expanded && !state.isPinned else {
-            barWidth = 0
+            if barWidth != 0 { barWidth = 0 }
             return
         }
         let autoClose = state.autoCloseInterval
         let window = min(10.0, autoClose * 0.6)
         let elapsed = Date.now.timeIntervalSince(state.lastActivity)
         let remaining = autoClose - elapsed
-        if remaining < window {
-            barWidth = max(0, CGFloat(remaining / window) * 160)
-        } else {
-            barWidth = 0
+        let target: CGFloat = remaining < window ? max(0, CGFloat(remaining / window) * 160) : 0
+        // The timer ticks at 10 Hz; a linear animation over the same 0.1 s glides between ticks,
+        // so the bar shrinks on every display frame instead of in 10 steps a second.
+        if target < barWidth && barWidth - target < 40 {
+            withAnimation(.linear(duration: 0.1)) { barWidth = target }
+        } else if target != barWidth {
+            barWidth = target
         }
     }
 }
@@ -829,14 +872,16 @@ struct IslandContentView: View {
                 ZStack(alignment: .topLeading) {
                     ForEach(IslandView.allCases, id: \.self) { v in
                         let active = state.view == v
-                        // Views that fill available height instead of the fixed 98pt content frame:
-                        // chat (prompt) is always flexible; mail is flexible only when active so
-                        // it doesn't push the stack taller when inactive.
-                        let isTall = v == .prompt || v == .nook || v == .tray || v == .overview || (v == .mail && active)
+                        // Home, Nook, Tray, and the plus page fill the drawer. Chat and an open mail card do too.
+                        // A short plus card left the blob low, under the drop label.
+                        let isTall = v == .prompt || v == .nook || v == .tray || v == .overview
+                            || v == .upload || v == .uploading || v == .choose
+                            || (v == .mail && active)
                         let anim: Animation = active
                             ? .spring(response: 0.4, dampingFraction: 0.8).delay(0.16)
                             : .easeIn(duration: 0.16)
                         IslandViewContent(view: v, state: state)
+                            .environment(\.islandViewActive, active)
                             .frame(width: geo.size.width, height: isTall ? geo.size.height : 98, alignment: .topLeading)
                             .clipped()
                             .opacity(active ? 1 : 0)
@@ -1015,15 +1060,90 @@ struct TabButton: View {
     }
 }
 
-// MARK: - Color helper
+// MARK: - Claude Plan header pill (GitHub build only)
 
-extension Color {
-    init(hex: String) {
-        let h = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
-        let val = UInt64(h, radix: 16) ?? 0
-        let r = Double((val >> 16) & 0xFF) / 255
-        let g = Double((val >> 8)  & 0xFF) / 255
-        let b = Double( val        & 0xFF) / 255
-        self.init(red: r, green: g, blue: b)
+#if !APPSTORE
+struct ClaudePlanHeaderPill: View {
+    @ObservedObject var state: AppState
+    var codex: Bool = false
+    @State private var isHovered = false
+
+    private var effectiveColor: String {
+        if codex { return CodexPlanGauge.color(state.codexPlanUsage) }
+        return ClaudePlanGauge.color(for: (state.demoPlanUsageOverride ?? state.claudePlanUsage).flatMap { ClaudePlanGauge.dominantPct($0) })
+    }
+
+    private var label: String {
+        if codex { return CodexPlanGauge.pillLabel(state.codexPlanUsage) }
+        guard let usage = state.demoPlanUsageOverride ?? state.claudePlanUsage,
+              let pct = ClaudePlanGauge.dominantPct(usage) else { return "Claude —" }
+        return "Claude \(Int(pct.rounded()))%"
+    }
+
+    private var isOpen: Bool { state.showingPlanDetail && state.planDetailIsCodex == codex }
+    private var isActive: Bool { isOpen || isHovered }
+
+    var body: some View {
+        Button(action: {
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                let open = isOpen
+                state.planDetailIsCodex = codex
+                state.showingPlanDetail = !open
+            }
+            if codex { state.refreshCodexPlanUsage() }
+        }) {
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(Color(hex: effectiveColor))
+                    .frame(width: 6, height: 6)
+                Text(label)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(isActive
+                                     ? Color(hex: effectiveColor).lighter(by: 0.3)
+                                     : Color(hex: "#6B7079"))
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                Capsule()
+                    .fill(isActive
+                          ? Color(hex: effectiveColor).opacity(0.18)
+                          : Color(hex: "#0E0F11"))
+            )
+            .overlay(
+                Capsule()
+                    .stroke(Color(hex: effectiveColor).opacity(isActive ? 0.55 : 0.14), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { h in
+            withAnimation(.spring(response: 0.2, dampingFraction: 0.7)) { isHovered = h }
+        }
+        .onAppear { if codex { state.refreshCodexPlanUsage() } }
+    }
+}
+#endif
+
+// MARK: - Compact mini mochi grid (2×2 to the right of the notch)
+
+struct CompactMiniGrid: View {
+    @ObservedObject var state: AppState
+
+    private var others: [AgentTask] {
+        Array(state.tasks.filter { $0.id != state.focusId }.prefix(4))
+    }
+
+    var body: some View {
+        let cols = [GridItem(.fixed(12), spacing: 4), GridItem(.fixed(12), spacing: 4)]
+        LazyVGrid(columns: cols, spacing: 4) {
+            ForEach(others) { task in
+                MiniBotCanvasView(task: task)
+                    .frame(width: 12 / 0.6, height: 12 / 0.6)
+                    .frame(width: 12, height: 12, alignment: .center)
+            }
+        }
+        .frame(width: 28, height: 28)
     }
 }

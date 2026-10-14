@@ -1,3 +1,4 @@
+import QuartzCore
 import SwiftUI
 
 /// SwiftUI wrapper: TimelineView drives a Canvas that calls BotEngine.draw().
@@ -6,6 +7,8 @@ struct BotCanvasView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var desk = TerminalDesk.shared
     var particleOverhang: CGFloat = 0
+    /// Desktop Mochi is the one on screen. The notch copy stays still.
+    var paused: Bool = false
 
     // One engine per view instance (main bot)
     @StateObject private var engine = BotEngine()
@@ -17,7 +20,7 @@ struct BotCanvasView: View {
     }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: paused)) { timeline in
             Canvas { context, size in
                 let now = timeline.date.timeIntervalSinceReferenceDate
                 let dtRaw = min(0.05, now - engine.lastTime)
@@ -157,14 +160,17 @@ struct MiniBotCanvasView: View {
     var glanceY: CGFloat = 0
     /// Hop distance in points. Zero keeps agent pills still.
     var hop: CGFloat = 0
+    /// Music pills can dance. Terminal blobs pass false.
+    var isDancing: Bool = false
     @StateObject private var engine: BotEngine
 
-    init(task: AgentTask, noticeStarted: Date? = nil, glanceX: CGFloat = 0, glanceY: CGFloat = 0, hop: CGFloat = 0) {
+    init(task: AgentTask, noticeStarted: Date? = nil, glanceX: CGFloat = 0, glanceY: CGFloat = 0, hop: CGFloat = 0, isDancing: Bool = false) {
         self.task = task
         self.noticeStarted = noticeStarted
         self.glanceX = glanceX
         self.glanceY = glanceY
         self.hop = hop
+        self.isDancing = isDancing
         _engine = StateObject(wrappedValue: {
             let e = BotEngine()
             e.isMini = true
@@ -189,6 +195,7 @@ struct MiniBotCanvasView: View {
                     if engine.state != task.state {
                         engine.setState(task.state)
                     }
+                    engine.setDancing(isDancing)
                     let elapsed = noticeStarted.map { timeline.date.timeIntervalSince($0) } ?? -1
                     if TerminalBehavior.noticeLookActive(elapsed: elapsed) {
                         engine.noticeLook = CGPoint(x: glanceX * pose.glance, y: glanceY * pose.glance)
@@ -226,19 +233,26 @@ struct MiniBotCanvasView: View {
     }
 }
 
-// MARK: - CGColor from hex string
+// MARK: - Frame clock
 
-func cgColorFromHex(_ hex: String) -> CGColor? {
-    let h = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
-    guard let val = UInt64(h, radix: 16) else { return nil }
-    let r = CGFloat((val >> 16) & 0xFF) / 255
-    let g = CGFloat((val >> 8)  & 0xFF) / 255
-    let b = CGFloat( val        & 0xFF) / 255
-    return CGColor(red: r, green: g, blue: b, alpha: 1)
-}
+/// Mochi's engine moves one `update(dt: 0.05)` per display frame. A slower
+/// drawing rate must not slow that step. One step per drawn frame keeps the
+/// rhythm his motion is tuned to.
+@MainActor
+enum MochiFrameClock {
+    private static var fpsCache: (value: Double, at: CFTimeInterval) = (60, -10)
+    static var displayFPS: Double {
+        let now = CACurrentMediaTime()
+        if now - fpsCache.at > 2 {
+            let fps = IslandWindowController.islandScreen().maximumFramesPerSecond
+            fpsCache = (Double(min(120, max(30, fps))), now)
+        }
+        return fpsCache.value
+    }
 
-extension CGColor {
-    static func from(_ hex: String) -> CGColor {
-        cgColorFromHex(hex) ?? CGColor(gray: 0.5, alpha: 1)
+    static func interval(fps: Double) -> TimeInterval { 0.9 / fps }
+
+    static func advance(_ engine: BotEngine) {
+        engine.update(dt: 0.05)
     }
 }

@@ -91,7 +91,8 @@ enum TerminalBehaviorTests {
         )
         precondition(TerminalBehavior.compactSide == 28)
         // Four faces, the Attach row, and the lock at the bottom of the tile.
-        precondition(TerminalBehavior.overviewHeight == 280, "overview is \(TerminalBehavior.overviewHeight)")
+        precondition(TerminalBehavior.homePlayerDrop == 24, "the home player needs room under the usage rows")
+        precondition(TerminalBehavior.overviewHeight == 304, "overview is \(TerminalBehavior.overviewHeight)")
         precondition(TerminalBehavior.faceColumn == 108)
         precondition(TerminalBehavior.faceGridWidth == 232, "both face columns share one centered group")
         let right = TerminalBehavior.overviewRightCard(islandWidth: IslandConst.expandedWidth)
@@ -426,7 +427,7 @@ enum TerminalBehaviorTests {
         let canvas = try! String(contentsOfFile: "NotchBuddy/Sources/App/BotCanvasView.swift", encoding: .utf8)
         precondition(canvas.contains("ringScale"), "a ring grows out of the figure")
         precondition(canvas.contains("noticeLook"), "the glance turns the eyes")
-        let engine = try! String(contentsOfFile: "NotchBuddy/Sources/App/BotEngine.swift", encoding: .utf8)
+        let engine = try! String(contentsOfFile: "NotchBuddy/Sources/CoucouKit/BotEngine.swift", encoding: .utf8)
         precondition(engine.contains("noticeLook"), "a notice glance wins over the wander")
     }
 
@@ -597,7 +598,7 @@ enum TerminalBehaviorTests {
         let task = sourceSlice(view, from: "private func faceTask", until: "struct TerminalPromptField")
         precondition(task.contains("color: slot.color"), "the figure is painted with the slot color")
         precondition(task.contains("holdSlotColor: true"), "a working terminal blob does not wash its body")
-        let engine = try! String(contentsOfFile: "NotchBuddy/Sources/App/BotEngine.swift", encoding: .utf8)
+        let engine = try! String(contentsOfFile: "NotchBuddy/Sources/CoucouKit/BotEngine.swift", encoding: .utf8)
         let bodyDraw = sourceSlice(engine, from: "private func drawBody", until: "private func drawBlush")
         precondition(bodyDraw.contains("holdSlotColor"), "the body fill skips the state wash when the slot color is held")
     }
@@ -1147,17 +1148,17 @@ enum TerminalBehaviorTests {
 
     /// A file dropped on a face attaches to that color. The rest of the page does not.
     static func testDropHitsTheBlob() {
-        precondition(TerminalBehavior.blobSlot(x: 360, y: 60, islandWidth: 640, contentTop: 0) == "green")
-        precondition(TerminalBehavior.blobSlot(x: 500, y: 60, islandWidth: 640, contentTop: 0) == "orange")
-        precondition(TerminalBehavior.blobSlot(x: 360, y: 110, islandWidth: 640, contentTop: 0) == "purple")
-        precondition(TerminalBehavior.blobSlot(x: 500, y: 110, islandWidth: 640, contentTop: 0) == "red")
+        precondition(TerminalBehavior.blobSlot(x: 430, y: 60, islandWidth: 640, contentTop: 0) == "green")
+        precondition(TerminalBehavior.blobSlot(x: 560, y: 60, islandWidth: 640, contentTop: 0) == "orange")
+        precondition(TerminalBehavior.blobSlot(x: 430, y: 110, islandWidth: 640, contentTop: 0) == "purple")
+        precondition(TerminalBehavior.blobSlot(x: 560, y: 110, islandWidth: 640, contentTop: 0) == "red")
         precondition(TerminalBehavior.blobSlot(x: 100, y: 60, islandWidth: 640, contentTop: 0) == nil)
         precondition(TerminalBehavior.blobSlot(x: 400, y: 200, islandWidth: 640, contentTop: 0) == nil)
-        precondition(TerminalBehavior.blobSlot(x: 360, y: 105, islandWidth: 640, contentTop: 45) == "green")
+        precondition(TerminalBehavior.blobSlot(x: 430, y: 105, islandWidth: 640, contentTop: 45) == "green")
         // Header has moved into the menu bar, so the faces sit higher in the drawer.
-        precondition(TerminalBehavior.blobSlot(x: 360, y: 70, islandWidth: 640, contentTop: 45, headerInContent: false) == "green")
-        precondition(TerminalBehavior.blobSlot(x: 500, y: 70, islandWidth: 640, contentTop: 45, headerInContent: false) == "orange")
-        precondition(TerminalBehavior.blobSlot(x: 360, y: 110, islandWidth: 640, contentTop: 45, headerInContent: false) == "purple")
+        precondition(TerminalBehavior.blobSlot(x: 430, y: 70, islandWidth: 640, contentTop: 45, headerInContent: false) == "green")
+        precondition(TerminalBehavior.blobSlot(x: 560, y: 70, islandWidth: 640, contentTop: 45, headerInContent: false) == "orange")
+        precondition(TerminalBehavior.blobSlot(x: 430, y: 110, islandWidth: 640, contentTop: 45, headerInContent: false) == "purple")
         precondition(TerminalBehavior.attachmentQuery(path: "/Users/samuel/Notes.txt", isDirectory: false) == "@/Users/samuel/Notes.txt")
         precondition(TerminalBehavior.attachmentQuery(path: "/Users/samuel/.grok/README.md", isDirectory: false) == "@!/Users/samuel/.grok/README.md")
         precondition(TerminalBehavior.attachmentQuery(path: "/Users/samuel/Desktop/Photos", isDirectory: true) == "@/Users/samuel/Desktop/Photos/")
