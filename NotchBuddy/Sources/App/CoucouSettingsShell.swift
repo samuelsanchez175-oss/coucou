@@ -666,7 +666,18 @@ private struct CalendarWidgetSettings: View {
                     prefs.persist()
                 }
             }
-            if !model.message.isEmpty {
+            if model.message == CalendarBehavior.message {
+                Button(model.message) {
+                    Task {
+                        if await NookBoard.shared.askForCalendar() {
+                            await model.load()
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            } else if !model.message.isEmpty {
                 Text(model.message).font(.system(size: 11)).foregroundStyle(.secondary)
             }
             ForEach(model.calendars) { item in
@@ -767,19 +778,16 @@ private final class CalendarListModel: ObservableObject {
     private let store = EKEventStore()
 
     func load() async {
-        do {
-            let granted = try await store.requestFullAccessToEvents()
-            guard granted else {
-                message = "Allow Calendar access in System Settings to choose calendars."
-                return
-            }
-            calendars = store.calendars(for: .event).map { calendar in
-                Item(id: calendar.calendarIdentifier, title: calendar.title, color: Color(cgColor: calendar.cgColor))
-            }
-            message = calendars.isEmpty ? "No calendars found." : ""
-        } catch {
-            message = error.localizedDescription
+        guard EKEventStore.authorizationStatus(for: .event) == .fullAccess else {
+            calendars = []
+            message = CalendarBehavior.message
+            return
         }
+        let listed = store.calendars(for: .event).map { calendar in
+            Item(id: calendar.calendarIdentifier, title: calendar.title, color: Color(cgColor: calendar.cgColor))
+        }
+        calendars = listed
+        message = listed.isEmpty ? "No calendars found." : ""
     }
 }
 

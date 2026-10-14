@@ -628,10 +628,19 @@ private struct NookCalendarColumn: View {
     @ViewBuilder
     private func eventsBlock(items: [NookEventFact], lead: NookEventFact?) -> some View {
         if board.calendarDenied {
-            Text("Calendar access is off. Turn it on in System Settings to show events.")
-                .font(.system(size: 12, weight: .medium, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.55))
-                .frame(maxWidth: .infinity)
+            Button {
+                Task { _ = await board.askForCalendar() }
+            } label: {
+                Text(CalendarBehavior.message)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.72))
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.plain)
+            .help("Asks macOS to let Coucou read your calendars.")
+            .accessibilityLabel("Allow Calendar access")
+            .accessibilityHint("Asks macOS to let Coucou read your calendars.")
         } else if lead == nil && (items.isEmpty || compact) {
             VStack(spacing: 4) {
                 Image(systemName: "calendar")

@@ -14,6 +14,7 @@ enum NookLayoutTests {
         testTrayChip()
         testTrayIsItsOwnPage()
         testMirror()
+        testCalendarAsk()
         testWidgetCombos()
         testHeaderLivesOnTheMenuBar()
         testTrayLineLeavesTheNotch()
@@ -21,7 +22,7 @@ enum NookLayoutTests {
         testShortcuts()
         testQuickApps()
         testNookRoom()
-        print("Nook layout: 18 cases passed")
+        print("Nook layout: 19 cases passed")
     }
 
     static func testWings() {
@@ -754,6 +755,53 @@ enum NookLayoutTests {
             until: "func baseMode"
         )
         precondition(choice.contains(".tray"), "a file dropped on the tray page stays on the tray")
+    }
+
+    /// A click on the calendar line asks for access. A menu-bar app never gets that prompt
+    /// unless it comes forward first. A missed prompt has to be cleared or Coucou never appears in Settings.
+    static func testCalendarAsk() {
+        precondition(CalendarBehavior.ask(for: .notDetermined) == .prompt)
+        precondition(CalendarBehavior.ask(for: .denied) == .prompt, "a click asks again when Settings has nothing to turn on")
+        precondition(CalendarBehavior.ask(for: .full) == .showEvents)
+        precondition(CalendarBehavior.clearsPreviousAnswer(.denied))
+        precondition(!CalendarBehavior.clearsPreviousAnswer(.notDetermined))
+        precondition(CalendarBehavior.activation(for: .prompt) == .regular)
+        precondition(CalendarBehavior.activation(for: .showEvents) == .accessory)
+        precondition(CalendarBehavior.afterAsk(granted: true) == .showEvents)
+        precondition(CalendarBehavior.afterAsk(granted: false) == .openSettings)
+        precondition(
+            CalendarBehavior.settingsURL.absoluteString
+                == "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Calendars"
+        )
+        precondition(CalendarBehavior.message == "Calendar access is off. Click to allow Coucou to show events.")
+
+        let column = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookIslandView.swift",
+            from: "struct NookCalendarColumn",
+            until: "struct NookMirrorColumn"
+        )
+        precondition(column.contains("askForCalendar"), "clicking the calendar line asks for access")
+        precondition(column.contains("CalendarBehavior.message"), "the line says the click allows Calendar access")
+
+        let ask = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookBoard.swift",
+            from: "func askForCalendar",
+            until: "func openCalendarEvent"
+        )
+        precondition(ask.contains("requestFullAccessToEvents"), "the click asks macOS for Calendar access")
+        precondition(ask.contains("setActivationPolicy(.regular)"), "Coucou comes forward so the prompt can appear")
+        precondition(ask.contains("askDelay"), "the prompt waits until Coucou is a normal app")
+        precondition(ask.contains("clearsPreviousAnswer"), "a missed answer is cleared so macOS can ask")
+        precondition(ask.contains("tccutil"), "clearing the missed answer removes the old Calendar decision")
+        precondition(ask.contains("CalendarBehavior.settingsURL"), "a refused ask opens Calendar in System Settings")
+        precondition(ask.contains("setActivationPolicy(.accessory)"), "Coucou returns to the menu bar after the ask")
+
+        let refresh = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookBoard.swift",
+            from: "func refreshCalendar",
+            until: "func readBattery"
+        )
+        precondition(!refresh.contains("requestFullAccessToEvents"), "opening the notch must not ask before the click")
     }
 
     /// The Mirror circle starts the front camera, and the next press stops it.

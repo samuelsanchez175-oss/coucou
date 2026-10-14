@@ -1907,6 +1907,47 @@ struct MirrorSessionPlan: Equatable {
     var wantsRunning: Bool
 }
 
+enum CalendarAccess: Equatable {
+    case full
+    case notDetermined
+    case denied
+}
+
+enum CalendarAsk: Equatable {
+    case prompt
+    case showEvents
+    case openSettings
+}
+
+/// A click on the calendar line asks macOS. The notch does not ask by itself.
+enum CalendarBehavior {
+    static let message = "Calendar access is off. Click to allow Coucou to show events."
+    static let settingsURL = URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Calendars")!
+
+    static func ask(for access: CalendarAccess) -> CalendarAsk {
+        switch access {
+        case .full: return .showEvents
+        case .notDetermined, .denied: return .prompt
+        }
+    }
+
+    /// A missed or refused prompt never adds Coucou to the Calendars list. Clear it before asking again.
+    static func clearsPreviousAnswer(_ access: CalendarAccess) -> Bool {
+        access == .denied
+    }
+
+    static func activation(for ask: CalendarAsk) -> MirrorActivation {
+        switch ask {
+        case .prompt: return .regular
+        case .showEvents, .openSettings: return .accessory
+        }
+    }
+
+    static func afterAsk(granted: Bool) -> CalendarAsk {
+        granted ? .showEvents : .openSettings
+    }
+}
+
 /// The Mirror circle turns the front camera on, and the next press turns it off.
 enum MirrorBehavior {
     enum Action: Equatable {

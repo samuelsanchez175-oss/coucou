@@ -92,7 +92,6 @@ final class NookBoard: ObservableObject {
     /// True while the pointer is inside the notch shape. Drives the media peek.
     @Published var pointerOnNotch = false
 
-    private let store = EKEventStore()
     private let defaults = UserDefaults.standard
     private var loop: Task<Void, Never>?
     private var tickCount = 0
@@ -395,6 +394,52 @@ final class NookBoard: ObservableObject {
             if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
                 NSWorkspace.shared.open(url)
             }
+        }
+    }
+
+    /// Ask macOS for Calendar access. Coucou comes forward first, because a menu-bar app never gets the prompt.
+    func askForCalendar() async -> Bool {
+        let status = EKEventStore.authorizationStatus(for: .event)
+        let access: CalendarAccess = status == .fullAccess ? .full : (status == .notDetermined ? .notDetermined : .denied)
+        let ask = CalendarBehavior.ask(for: access)
+        guard ask == .prompt else {
+            await refreshCalendar()
+            return true
+        }
+        if CalendarBehavior.clearsPreviousAnswer(access) {
+            let bundleID = Bundle.main.bundleIdentifier ?? "fr.louisraille.NotchBuddy"
+            let reset = Process()
+            reset.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+            reset.arguments = ["reset", "Calendar", bundleID]
+            reset.standardOutput = Pipe()
+            reset.standardError = Pipe()
+            try? reset.run()
+            reset.waitUntilExit()
+        }
+        let activation = CalendarBehavior.activation(for: ask)
+        if activation == .regular {
+            NSApp.setActivationPolicy(.regular)
+            NSApp.activate()
+        }
+        let delay = MirrorBehavior.askDelay(for: activation)
+        if delay > 0 {
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+        }
+        let granted = (try? await EKEventStore().requestFullAccessToEvents()) ?? false
+        let follow = CalendarBehavior.afterAsk(granted: granted)
+        NSApp.setActivationPolicy(.accessory)
+        switch follow {
+        case .showEvents:
+            calendarDenied = false
+            await refreshCalendar()
+            return true
+        case .openSettings:
+            calendarDenied = true
+            NSWorkspace.shared.open(CalendarBehavior.settingsURL)
+            return false
+        case .prompt:
+            calendarDenied = true
+            return false
         }
     }
 
@@ -872,19 +917,15 @@ final class NookBoard: ObservableObject {
             return
         }
         let status = EKEventStore.authorizationStatus(for: .event)
-        if status == .notDetermined {
-            guard nookVisible, !askedCalendar else { return }
-            askedCalendar = true
-            let granted = (try? await store.requestFullAccessToEvents()) ?? false
-            calendarDenied = !granted
-            guard granted else { return }
-        } else if status != .fullAccess {
+        guard status == .fullAccess else {
             calendarDenied = true
             events = []
+            askedCalendar = true
             return
         }
         calendarDenied = false
         askedCalendar = true
+        let store = EKEventStore()
         let now = Date()
         let start = Calendar.current.date(byAdding: .day, value: -30, to: now) ?? now
         let end = Calendar.current.date(byAdding: .day, value: 30, to: now) ?? now
