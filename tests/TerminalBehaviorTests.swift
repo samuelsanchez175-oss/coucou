@@ -23,6 +23,7 @@ enum TerminalBehaviorTests {
         testNewWindowKeepsTheBlobColor()
         testFontFillsTheCornerAfterTheColor()
         testOneClickOpensOneWindow()
+        testModelFlagDoesNotUseTheLaunchCommand()
         testCuddlerFollowsTheTerminal()
         testBlobUsesTheTerminalsOwnName()
         testBlobTitleFitsInThreeWords()
@@ -44,7 +45,7 @@ enum TerminalBehaviorTests {
         testNookKeepsTheSharedHeader()
         testHeaderSitsOnTheMenuBar()
         testBlobOpensAWindowAtTwentyPoint()
-        print("Terminal behavior: 38 cases passed")
+        print("Terminal behavior: 39 cases passed")
     }
 
     /// A download that prints "45%" must stay Working. Treating every
@@ -989,6 +990,16 @@ enum TerminalBehaviorTests {
 
     /// The notch click and the blob gesture both see one press. The second one
     /// must not start another terminal while the first is still opening.
+    /// `launch` is an AppleScript command. Assigning the model line to it
+    /// stops the window before Terminal creates it.
+    static func testModelFlagDoesNotUseTheLaunchCommand() {
+        let desk = try! String(contentsOfFile: "NotchBuddy/Sources/App/TerminalDesk.swift", encoding: .utf8)
+        let created = sourceSlice(desk, from: "func openNew(", until: "enum CotypistLink")
+        precondition(!created.contains("set launch to"), "launch is an AppleScript command, so the model line never runs")
+        precondition(created.contains("--model"), "Claude and Grok still start with the model saved under Keys")
+        precondition(created.contains("shellLine"), "the model flag is passed in a plain variable")
+    }
+
     static func testOneClickOpensOneWindow() {
         precondition(TerminalBehavior.startsOneWindow(inFlight: false), "the first press opens the color")
         precondition(TerminalBehavior.startsOneWindow(inFlight: true) == false, "a press already opening that color does not open a tab as well")

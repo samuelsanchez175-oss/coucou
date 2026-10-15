@@ -1529,9 +1529,9 @@ enum TerminalBridge {
           set toolName to item 7 of argv
           set missingLine to item 8 of argv
           set modelID to item 9 of argv
-          set launch to toolName
-          if modelID is not "" then set launch to toolName & " --model " & quoted form of modelID
-          set cmd to "export PATH=\\"$HOME/.grok/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\\"; cd " & quoted form of folderPath & " && if command -v " & toolName & " >/dev/null 2>&1; then exec " & launch & "; else echo " & quoted form of missingLine & "; fi"
+          set shellLine to toolName
+          if modelID is not "" then set shellLine to toolName & " --model " & quoted form of modelID
+          set cmd to "export PATH=\\"$HOME/.grok/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\\"; cd " & quoted form of folderPath & " && if command -v " & toolName & " >/dev/null 2>&1; then exec " & shellLine & "; else echo " & quoted form of missingLine & "; fi"
           tell application "Terminal"
             \(rememberWindowFrames)
             activate
