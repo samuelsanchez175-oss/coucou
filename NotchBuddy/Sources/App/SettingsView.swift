@@ -403,15 +403,18 @@ struct SettingsView: View {
                 GroupBox("Active pills") {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
-                            Text("VS Code")
-                                .font(.system(size: 12, weight: .semibold))
-                            Circle().fill(Color(hex: "#F5F6F8")).frame(width: 8, height: 8)
+                            Picker("White blob", selection: whiteBlobChoice) {
+                                Text("Grok Bot").tag(PillCatalog.grokBotPillId)
+                                Text("VS Code").tag(PillCatalog.vsCodePillId)
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.menu)
+                            .frame(width: 140, alignment: .leading)
                             Spacer()
                             Text("Always active")
                                 .font(.system(size: 11))
                                 .foregroundColor(.secondary)
                         }
-
                     }
                     .padding(6)
                 }
@@ -469,6 +472,17 @@ struct SettingsView: View {
             }
         }
         .frame(minWidth: 420, maxWidth: .infinity, minHeight: 320, maxHeight: .infinity)
+    }
+
+    /// Grok Bot is the first choice. VS Code is the other choice for the white blob.
+    private var whiteBlobChoice: Binding<String> {
+        Binding(
+            get: {
+                let id = state.mainPillId
+                return PillCatalog.whiteBlobPillIds.contains(id) ? id : PillCatalog.defaultMainPillId
+            },
+            set: { state.setMainPill($0) }
+        )
     }
 
     // MARK: - Actions

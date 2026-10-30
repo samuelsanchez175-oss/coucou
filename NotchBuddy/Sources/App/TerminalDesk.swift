@@ -338,6 +338,7 @@ final class TerminalDesk: ObservableObject {
     }
 
     /// A click raises the married window and leaves its frame. An empty color opens one.
+    /// A window that is already gone opens a new one in that corner.
     func focus(_ id: String) {
         select(id)
         guard let slot = slots.first(where: { $0.id == id }) else { return }
@@ -346,9 +347,14 @@ final class TerminalDesk: ObservableObject {
             return
         }
         Task {
-            await Task.detached {
+            let raised = await Task.detached {
                 TerminalBridge.focus(windowID)
             }.value
+            guard !raised else { return }
+            let still = slots.first { $0.id == id }?.windowID
+            guard still == windowID || still == nil else { return }
+            setWindow(id, nil)
+            openOrFocus(id)
         }
     }
 

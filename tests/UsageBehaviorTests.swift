@@ -18,7 +18,9 @@ enum UsageBehaviorTests {
         testStackSitsUnderTheBlob()
         testRingsAreInTheLeftCard()
         testColumnsReadLeftToRight()
-        print("Usage behavior: 10 cases passed")
+        testExtraModelsStayInTheNotch()
+        testSavedLimitsKeepTheirClock()
+        print("Usage behavior: 12 cases passed")
     }
 
     static func testOrderAndColors() {
@@ -198,6 +200,10 @@ enum UsageBehaviorTests {
         let blobCenterY = TerminalBehavior.overviewBlobCenterY - TerminalBehavior.menuBarHeaderBand
         let blobBottom = blobCenterY + UsageBehavior.blobDiameter / 2
         precondition(UsageBehavior.stackTop >= blobBottom + 2, "the rings start under the blob")
+        precondition(UsageBehavior.shelfClearance == UsageBehavior.playerRow + UsageBehavior.playerGap + UsageBehavior.playerBottom,
+                     "the player band is the row, the gap, and the pad under it")
+        precondition(UsageBehavior.playerGap >= 12, "the player title needs air under the last usage row")
+        precondition(UsageBehavior.playerBottom >= 12, "the player stays above the pull pill")
         precondition(UsageBehavior.stackLeading >= 0)
         precondition(UsageBehavior.stackLeading + UsageBehavior.stackWidth <= TerminalBehavior.overviewLeftCard)
         let body = TerminalBehavior.drawerBodyHeight(layoutHeight: TerminalBehavior.overviewHeight, hasNotch: true)
@@ -225,7 +231,10 @@ enum UsageBehaviorTests {
         guard let stack = source.range(of: "struct UsageRingStack") else {
             preconditionFailure("usage rings moved")
         }
-        let body = source[stack.lowerBound...].prefix(1600)
+        guard let ring = source.range(of: "private struct UsageRing") else {
+            preconditionFailure("usage ring moved")
+        }
+        let body = source[stack.lowerBound..<ring.lowerBound]
         precondition(body.contains("row.model"), "each row names the model")
         precondition(body.contains("gate.window"), "each gate keeps its own caption")
     }
@@ -270,5 +279,100 @@ enum UsageBehaviorTests {
         let bareWeek = undated.gates.first { $0.window == "Week" }
         precondition(UsageBehavior.replenishLabel(remaining: bareHour?.remaining, at: bareHour?.replenishes, now: liveNow, timeZone: zone) == nil)
         precondition(UsageBehavior.replenishLabel(remaining: bareWeek?.remaining, at: bareWeek?.replenishes, now: liveNow, timeZone: zone) == nil)
+    }
+
+    /// A long detected list scrolls under the blob. The four faces stay at the top right,
+    /// and the extra rows do not rise into the right side of the notch.
+    static func testExtraModelsStayInTheNotch() {
+        let five = UsageBehavior.laidOutStackHeight(rowCount: UsageBehavior.services.count)
+        precondition(abs(five - UsageBehavior.stackHeight) < 0.5, "five services still fill the card")
+        let many = UsageBehavior.laidOutStackHeight(rowCount: 18)
+        precondition(many + 0.5 >= five, "the list keeps the room it already had")
+        precondition(many <= UsageBehavior.header + UsageBehavior.gap + UsageBehavior.rowViewport + 0.5,
+                     "eighteen models stay inside the viewport")
+        let body = TerminalBehavior.drawerBodyHeight(layoutHeight: TerminalBehavior.overviewHeight, hasNotch: true)
+        let shelfTop = body - UsageBehavior.pageClearance - UsageBehavior.shelfClearance
+        precondition(
+            UsageBehavior.stackTop + many + 8 <= shelfTop + 0.5,
+            "extra models stay above the player and out of the right notch"
+        )
+        precondition(UsageBehavior.rowListHeight(rowCount: 18) <= UsageBehavior.rowViewport + 0.5)
+        precondition(UsageBehavior.rowListHeight(rowCount: 3) + 0.5 >= UsageBehavior.row * 3)
+        let openRoom: CGFloat = 420
+        let opened = UsageBehavior.rowListHeight(rowCount: 18, offered: openRoom)
+        precondition(opened + 0.5 >= UsageBehavior.row * 18, "a tall card shows the rows the short cap hid")
+        precondition(UsageBehavior.rowListHeight(rowCount: 30, offered: openRoom) <= openRoom + 0.5,
+                     "rows that still overflow stay inside the card")
+
+        let overview = try! String(contentsOfFile: "NotchBuddy/Sources/App/IslandViewContent.swift", encoding: .utf8)
+        guard let home = overview.range(of: "struct OverviewView"),
+              let rings = overview.range(of: "struct UsageRingStack") else {
+            preconditionFailure("overview layout moved")
+        }
+        let page = overview[home.lowerBound..<rings.lowerBound]
+        precondition(page.contains("HStack(alignment: .top, spacing: TerminalBehavior.overviewCardGap)"),
+                     "the terminal faces are not pinned to the top right")
+        precondition(page.contains(".frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)"),
+                     "the right card can still drop when more limits appear")
+        let stack = overview[rings.lowerBound...].prefix(2600)
+        precondition(stack.contains("offered: geo.size.height"), "the list is still capped short of the open card")
+        precondition(stack.contains("ScrollView"), "extra models have nowhere to scroll")
+        precondition(page.contains(".frame(height: UsageBehavior.shelfClearance, alignment: .bottom)"),
+                     "the player is not a fixed band under the usage rows")
+        precondition(!page.contains(".overlay(alignment: .bottom)"),
+                     "the player is painted on top of the usage rows")
+    }
+
+    /// A refused live read keeps the saved percent and the clock it was saved.
+    static func testSavedLimitsKeepTheirClock() {
+        let history = Data(#"{"version":2,"samples":[{"t":1793292389446,"u":{"fh":38,"sd":46}}]}"#.utf8)
+        let saved = UsageBehavior.parseClaudeHistory(history)
+        let hour = saved.gates.first { $0.window == "5 hours" }
+        let week = saved.gates.first { $0.window == "Week" }
+        precondition(hour?.remaining == 62, "38 percent used leaves 62")
+        precondition(week?.remaining == 54, "46 percent used leaves 54")
+        let savedAt = hour?.savedAt?.timeIntervalSince1970 ?? 0
+        precondition(abs(savedAt - 1793292389.446) < 0.01, "the history clock was \(savedAt)")
+        precondition(week?.savedAt == hour?.savedAt)
+        let zone = TimeZone(secondsFromGMT: 0)!
+        precondition(UsageBehavior.savedReading(at: hour?.savedAt, timeZone: zone)?.day == "Oct 29")
+        let fresh = UsageLevels(gates: [UsageGate(model: "Claude", window: "5 hours", remaining: 10)])
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let keptFresh = UsageBehavior.kept(fresh: fresh, saved: saved, now: now)
+        precondition(keptFresh.gates.first?.remaining == 10)
+        precondition(keptFresh.gates.first?.savedAt == now)
+        let missed = UsageBehavior.kept(fresh: nil, saved: saved)
+        precondition(missed.gates.first { $0.window == "Week" }?.remaining == 54)
+        precondition(missed.gates.first?.savedAt == hour?.savedAt)
+        let empty = UsageBehavior.kept(fresh: UsageLevels(), saved: saved)
+        precondition(empty.gates.contains { $0.remaining == 62 })
+        let command = UsageBehavior.usageRefreshCommand(
+            grok: "/Users/samuel/.grok/bin/grok",
+            folder: "/Users/samuel/Library/Application Support/Coucou",
+            limitsPath: "/Users/samuel/Library/Application Support/Coucou/usage-limits.json"
+        )
+        precondition(command.contains("--permission-mode plan"))
+        precondition(command.contains("'/Users/samuel/.grok/bin/grok'"))
+        precondition(command.contains("'/Users/samuel/Library/Application Support/Coucou'"))
+        precondition(command.contains("usage-limits.json"))
+        precondition(!command.contains("ditto"))
+        precondition(!command.contains("git push"))
+        let page = try! String(contentsOfFile: "NotchBuddy/Sources/App/IslandViewContent.swift", encoding: .utf8)
+        let arrow = page.range(of: "arrow.up.right")
+        let refresh = page.range(of: "Refresh usage")
+        precondition(arrow != nil && refresh != nil)
+        precondition(arrow!.lowerBound < refresh!.lowerBound, "the refresh button sits under the arrow")
+        precondition(page.contains("arrow.clockwise"))
+        precondition(page.contains("forceRefresh()"))
+        let monitor = try! String(contentsOfFile: "NotchBuddy/Sources/App/UsageMonitor.swift", encoding: .utf8)
+        precondition(monitor.contains("kept(fresh:"))
+        precondition(monitor.contains("claudeHistory()"))
+        precondition(!monitor.contains("value ?? UsageLevels()"), "a miss no longer erases the saved limits")
+
+        let root = try! String(contentsOfFile: "NotchBuddy/Sources/App/IslandRootView.swift", encoding: .utf8)
+        precondition(
+            root.contains(".frame(width: target.0, height: max(0, contentHeight - earOffset), alignment: .top)"),
+            "a tall usage list can still rise into the right side of the notch"
+        )
     }
 }

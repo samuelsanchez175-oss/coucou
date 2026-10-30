@@ -88,32 +88,29 @@ struct TrayView: View {
     }
 }
 
-/// Resting notch while audio or video is on: the play button only, on the right.
-/// The closed notch does not show the app icon, the waveform, or the name.
+/// Resting notch while a video is playing: the waveform only, on the right.
+/// The play button, the app icon, and the name stay off the closed notch.
+/// Bar height follows the sound that is playing.
 struct NotchMediaShelf: View {
-    @ObservedObject var board: NookBoard
     var islandWidth: CGFloat
     var contentCenterY: CGFloat
 
     var body: some View {
-        let moving = NookPlayback.waveIsMoving(
-            reportedPlaying: board.mediaIsPlaying,
-            outputRunning: board.mediaOutputRunning
-        )
-        let symbol = moving ? "pause.fill" : "play.fill"
-        let verb = moving ? "Pause" : "Play"
-        Button {
-            board.togglePlayback()
-        } label: {
-            Image(systemName: symbol)
-                .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: 18, height: 18)
-                .background(Circle().fill(Color.white.opacity(0.16)))
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { _ in
+            let heights = NookPlayback.playedBars(PlaybackWave.shared.levels)
+            HStack(alignment: .center, spacing: 2) {
+                ForEach(Array(heights.enumerated()), id: \.offset) { _, height in
+                    Capsule()
+                        .fill(Color.white)
+                        .frame(width: 2, height: max(3, 14 * height))
+                }
+            }
+            .frame(width: NookPlayback.shelfContentWidth, height: 16)
+            .accessibilityLabel("Video playing")
+            .help("Video is playing")
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(verb)
-        .help(verb)
+        .onAppear { PlaybackWave.shared.start() }
+        .onDisappear { PlaybackWave.shared.stop() }
         .position(
             x: NookPlayback.mediaShelfCenterX(islandWidth: islandWidth, wing: NookPlayback.mediaWing),
             y: contentCenterY

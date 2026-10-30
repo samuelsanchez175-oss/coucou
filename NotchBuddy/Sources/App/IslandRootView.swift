@@ -71,11 +71,12 @@ struct IslandContainer: View {
         let clearance = NotchClearance(occludedHeight: state.hasNotch ? state.notchHeight : 0)
         let earY = clearance.earCenterY(fallback: islandHeight)
         let dropY = clearance.readableCenterY(fallback: islandHeight)
-        let showMedia = NookPlayback.showsOnClosedNotch(
+        let showMedia = NookPlayback.showsWaveOnClosedNotch(
             bundleID: board.mediaBundleID,
             displayName: board.mediaDisplayName,
             title: board.mediaTitle,
-            playing: board.mediaIsPlaying
+            playing: board.mediaIsPlaying,
+            outputRunning: board.mediaOutputRunning
         )
         let earHeight = clearance.expandedOffset > 0 ? clearance.expandedOffset : islandHeight
 
@@ -122,6 +123,10 @@ struct IslandContainer: View {
             closedFaces(earY: earY, earHeight: earHeight)
 
             if state.mode == .expanded {
+                if let prompt = board.updatePrompt {
+                    UpdatePromptCard(board: board, prompt: prompt)
+                        .position(x: islandWidth / 2, y: max(80, islandHeight / 2))
+                }
                 DrawerPullTab(state: state, restingHeight: max(1, islandHeight - state.drawerExtension)) {
                     NotificationCenter.default.post(name: .islandCollapse, object: nil)
                 }
@@ -293,7 +298,7 @@ struct IslandContainer: View {
                         }
                     } else {
                         IslandContentView(state: state)
-                            .frame(width: target.0, height: max(0, contentHeight - earOffset))
+                            .frame(width: target.0, height: max(0, contentHeight - earOffset), alignment: .top)
                             .offset(y: earOffset)
                     }
                 }
@@ -335,7 +340,6 @@ struct IslandContainer: View {
                 let kind = IslandMotion.shelf(playing: showMedia, pointerOnNotch: board.pointerOnNotch)
                 if kind != .faces {
                     NotchMediaShelf(
-                        board: board,
                         islandWidth: islandWidth,
                         contentCenterY: earY
                     )
@@ -568,6 +572,7 @@ struct IslandShape: Shape {
 
 struct BotPlacement: View {
     @ObservedObject var state: AppState
+    @ObservedObject private var board = NookBoard.shared
     let islandW: CGFloat
     let islandH: CGFloat
     var sideWing: CGFloat = 0
@@ -633,6 +638,17 @@ struct BotPlacement: View {
                     .animation(.spring(response: 0.5, dampingFraction: 0.72), value: cy)
                     .animation(.spring(response: 0.5, dampingFraction: 0.72), value: canvasSize)
                     .transition(.scale(scale: 0.01, anchor: .center).combined(with: .opacity))
+                if state.mode != .expanded, !state.mochiOnDesktop {
+                    let pictureReady = board.mediaWing > 0 && (
+                        board.artworkPath != nil
+                            || FileManager.default.fileExists(atPath: "/tmp/coucou-now-playing.jpg")
+                    )
+                    let fitted = NookPlayback.closedThumbCenterX(whiteX: cx, botDiameter: diameter)
+                    let beside = cx - diameter / 2 - 4 - NookPlayback.closedThumbWidth / 2
+                    if pictureReady, let thumbX = fitted ?? (beside > 8 ? beside : nil) {
+                        ClosedPlayingThumb(centerX: thumbX, centerY: cy)
+                    }
+                }
             }
         }
         // Branch switch (uploading ↔ normal) animates with a fast spring: uploading dot
@@ -902,6 +918,55 @@ struct IslandContentView: View {
 
 // MARK: - Island header (tabs + icons)
 
+/// The playing video's picture, on the outer side of the white blob.
+private struct ClosedPlayingThumb: View {
+    var centerX: CGFloat
+    var centerY: CGFloat
+    @ObservedObject private var board = NookBoard.shared
+    @State private var image: NSImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+            }
+        }
+        .frame(width: NookPlayback.closedThumbWidth, height: NookPlayback.closedThumbHeight)
+        .background(Color.black)
+        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .stroke(Color.white.opacity(0.85), lineWidth: 1)
+        )
+        .position(x: centerX, y: centerY)
+        .accessibilityLabel("Playing video")
+        .task(id: board.artworkToken) { await reload() }
+        .onChange(of: board.artworkPath) { _, _ in
+            if let picture = currentPicture() { image = picture }
+        }
+    }
+
+    private func reload() async {
+        for _ in 0..<8 {
+            if let picture = currentPicture() {
+                image = picture
+                return
+            }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+    }
+
+    private func currentPicture() -> NSImage? {
+        let path = board.artworkPath ?? "/tmp/coucou-now-playing.jpg"
+        guard let picture = NSImage(contentsOfFile: path),
+              picture.size.width > 1,
+              picture.size.height > 1 else { return nil }
+        return picture
+    }
+}
+
 /// Closed-notch lamp. The blue dot means an event is soon or a timer reached zero.
 private struct ClosedNookLamp: View {
     var centerX: CGFloat
@@ -1013,7 +1078,67 @@ struct IslandHeader: View {
             .buttonStyle(.plain)
             .help("Volume")
             .accessibilityLabel("Volume")
+
+            Button(action: { NSApplication.shared.terminate(nil) }) {
+                Image(systemName: "power")
+                    .font(.system(size: 14))
+                    .foregroundColor(Color(hex: "#8E939C"))
+            }
+            .buttonStyle(.plain)
+            .help("Quit")
+            .accessibilityLabel("Quit")
+
+            Button(action: { board.lookForUpdate() }) {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(.system(size: 14))
+                    .foregroundColor(Color(hex: "#8E939C"))
+            }
+            .buttonStyle(.plain)
+            .help(board.updateDownloading ? "Downloading the update" : "Check for update")
+            .accessibilityLabel("Check for update")
+            .disabled(board.updateChecking || board.updateDownloading || board.updatePrompt != nil)
         }
+    }
+}
+
+struct UpdatePromptState: Equatable {
+    var title: String
+    var detail: String
+    /// True when a zip is saved and Update may ask Grok. Update does not replace Coucou.
+    var zipReady: Bool
+}
+
+private struct UpdatePromptCard: View {
+    @ObservedObject var board: NookBoard
+    var prompt: UpdatePromptState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(prompt.title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(Color(hex: "#F5F6F8"))
+            if !prompt.detail.isEmpty {
+                Text(prompt.detail)
+                    .font(.system(size: 11))
+                    .foregroundColor(Color(hex: "#8E939C"))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack(spacing: 8) {
+                if prompt.zipReady {
+                    Button("Update") { board.answerUpdatePrompt(.update) }
+                        .buttonStyle(.borderedProminent)
+                    Button("Save for later") { board.answerUpdatePrompt(.saveForLater) }
+                        .buttonStyle(.bordered)
+                } else {
+                    Button("OK") { board.dismissUpdatePrompt() }
+                        .buttonStyle(.bordered)
+                }
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: 280, alignment: .leading)
+        .background(Color(hex: "#1D1F23"))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 

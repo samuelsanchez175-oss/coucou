@@ -36,6 +36,26 @@ enum LiveActivityBehavior {
     struct PublishedRelease: Equatable, Sendable {
         var version: String
         var page: String
+        /// Direct Coucou.zip on the published GitHub release. Nil when that asset is missing.
+        var download: String?
+    }
+
+    /// What the check-for-update button does after it reads the release. None of these install it.
+    enum UpdateLookup: Equatable {
+        /// Installed is current, or the check failed. Do not download.
+        case current
+        /// A newer release has no Coucou.zip. Do not invent a download.
+        case missingZip(version: String)
+        /// A newer Coucou.zip is not on disk yet. Download it, then ask.
+        case download(version: String, url: String)
+        /// That zip is already saved. Ask again. Do not download it again.
+        case ask(version: String)
+    }
+
+    /// The prompt after a download. Save for later leaves Coucou as it is.
+    enum UpdatePromptChoice: Equatable {
+        case update
+        case saveForLater
     }
 
     /// Latest published release. The app reads this once, not on every notch tick.
@@ -53,7 +73,139 @@ enum LiveActivityBehavior {
     static func publishedRelease(json: Data) -> PublishedRelease? {
         guard let object = try? JSONSerialization.jsonObject(with: json) as? [String: Any],
               let version = version(fromTag: object["tag_name"] as? String) else { return nil }
-        return PublishedRelease(version: version, page: releasePage(object["html_url"] as? String))
+        return PublishedRelease(
+            version: version,
+            page: releasePage(object["html_url"] as? String),
+            download: macZipURL(object)
+        )
+    }
+
+    /// Download only when the offer is newer. A saved zip asks again and does not install.
+    static func lookup(installed: String, offer: PublishedRelease?, savedFileExists: Bool) -> UpdateLookup {
+        guard let offer, updateIsAvailable(installed: installed, offered: offer.version) else {
+            return .current
+        }
+        if savedFileExists {
+            return .ask(version: offer.version)
+        }
+        guard let download = offer.download else {
+            return .missingZip(version: offer.version)
+        }
+        return .download(version: offer.version, url: download)
+    }
+
+    /// The original branch. The downloaded zip is that release's app, not this Mac's copy.
+    static let originalBranch = "https://github.com/Louis-CFM/coucou.git"
+
+    /// Update asks Grok to compare. Save for later does not.
+    static func asksGrok(_ choice: UpdatePromptChoice) -> Bool {
+        choice == .update
+    }
+
+    /// Neither choice installs the downloaded app over this Mac's Coucou.
+    static func installsDownloadedApp(_ choice: UpdatePromptChoice) -> Bool {
+        false
+    }
+
+    /// Samuel's local tree. The running app is built from this folder.
+    static func localTree(home: URL) -> URL {
+        home.appendingPathComponent("dev").appendingPathComponent("coucou")
+    }
+
+    /// The Grok CLI that reviews a release against the local tree.
+    static func grokExecutable(home: URL) -> URL {
+        home.appendingPathComponent(".grok").appendingPathComponent("bin").appendingPathComponent("grok")
+    }
+
+    /// What Grok is told. The zip stays a download. The local tree stays as it is.
+    static func reviewBrief(version: String, zipPath: String) -> String {
+        """
+        The local Coucou in this folder is different from the original branch on GitHub.
+
+        Original branch: \(originalBranch)
+        Downloaded release zip: \(zipPath)
+        Offered version: \(version)
+
+        This zip is the original app. It must not be installed over the Coucou on this Mac.
+        Do not regress the local Coucou in this folder.
+
+        Do not replace /Applications/Coucou.app.
+        Do not unzip that zip over the app.
+        Do not discard uncommitted work in this folder.
+        Do not push.
+        Do not merge, reset, checkout, or clean.
+
+        Fetch the original branch and compare it with this folder. Say what the original branch has that this copy does not, and what this copy has that the original branch does not. Then stop and wait.
+        """
+    }
+
+    /// One shell argument. A quote inside the brief stays inside the argument.
+    static func shellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    /// Opens Grok in plan mode on the local tree. This command does not install the zip.
+    static func reviewCommand(repo: String, grok: String, brief: String) -> String {
+        let pathExport = #"export PATH="$HOME/.grok/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH""#
+        return """
+        \(pathExport); cd \(shellQuote(repo)) && exec \(shellQuote(grok)) --permission-mode plan --no-subagents --cwd \(shellQuote(repo)) --verbatim \(shellQuote(brief))
+        """
+    }
+
+    /// The Mac zip on this repo. Any other asset, host, or path is ignored.
+    static func macZipURL(_ object: [String: Any]) -> String? {
+        guard let assets = object["assets"] as? [[String: Any]] else { return nil }
+        for asset in assets {
+            guard (asset["name"] as? String) == "Coucou.zip" else { continue }
+            if let url = allowedDownloadURL(asset["browser_download_url"] as? String) {
+                return url
+            }
+        }
+        return nil
+    }
+
+    /// https://github.com/Louis-CFM/coucou/releases/download/<tag>/Coucou.zip
+    static func allowedDownloadURL(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.contains(".."),
+              let url = URL(string: trimmed),
+              url.scheme?.lowercased() == "https",
+              url.host?.lowercased() == "github.com" else { return nil }
+        let path = url.path
+        guard path.hasPrefix("/Louis-CFM/coucou/releases/download/"),
+              path.hasSuffix("/Coucou.zip") else { return nil }
+        return url.absoluteString
+    }
+
+    /// The GitHub download redirects to its asset host. Other hosts are refused.
+    static func allowsReleaseRedirect(_ url: URL) -> Bool {
+        guard url.scheme?.lowercased() == "https", let host = url.host?.lowercased() else { return false }
+        if host == "github.com" {
+            return allowedDownloadURL(url.absoluteString) != nil
+        }
+        switch host {
+        case "release-assets.githubusercontent.com",
+             "objects.githubusercontent.com",
+             "github-releases.githubusercontent.com":
+            return true
+        default:
+            return false
+        }
+    }
+
+    static func isZipHeader(_ data: Data) -> Bool {
+        guard data.count >= 4 else { return false }
+        return data[data.startIndex] == 0x50
+            && data[data.startIndex + 1] == 0x4B
+            && data[data.startIndex + 2] == 0x03
+            && data[data.startIndex + 3] == 0x04
+    }
+
+    static func isZipFile(at url: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        return isZipHeader(handle.readData(ofLength: 4))
     }
 
     /// Drops one leading v. "latest" and a blank tag are not versions.

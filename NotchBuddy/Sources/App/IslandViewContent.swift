@@ -54,9 +54,20 @@ struct OverviewView: View {
 
     var agent: AgentTask? { state.focusTask }
 
+    /// A detail card covers the usage list. The player band stays off while that card is up.
+    private var hidesUsage: Bool {
+        #if !APPSTORE
+        showingN8nDetail || activeDiffId != nil || state.showingPlanDetail
+        #else
+        showingN8nDetail || activeDiffId != nil
+        #endif
+    }
+
     var body: some View {
-        HStack(spacing: TerminalBehavior.overviewCardGap) {
-            // Left card: title row + ticker below + ↗ button overlay
+        HStack(alignment: .top, spacing: TerminalBehavior.overviewCardGap) {
+            // Left card: title row + ticker below + ↗ button overlay.
+            // The player is a fixed band under the usage rows. It is not drawn on top of them.
+            VStack(spacing: 0) {
             ZStack(alignment: .topLeading) {
                 CardBackground(wash: nil)
 
@@ -150,59 +161,76 @@ struct OverviewView: View {
                         .transition(.opacity)
                 }
 
-                // ↗ jump button — last in ZStack so it renders on top; hidden while any detail is open
+                // Model name, then that model's usage rings, under the white blob.
+                if !hidesUsage {
+                    UsageRingStack()
+                        .padding(.leading, UsageBehavior.stackLeading)
+                        .padding(.top, UsageBehavior.stackTop)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                        .clipped()
+                }
+
+                // ↗ jump button, then the usage refresh under it. Last in the ZStack so the rings do not take the click.
                 #if !APPSTORE
                 let hideJumpButton = showingN8nDetail || state.showingPlanDetail || activeDiffId != nil
                 #else
                 let hideJumpButton = showingN8nDetail || activeDiffId != nil
                 #endif
                 if !hideJumpButton {
-                    Button(action: { openAgentTarget(agent) }) {
-                        Image(systemName: "arrow.up.right")
-                            .font(.system(size: 8, weight: .medium))
-                            .foregroundColor(Color(hex: "#5F646D"))
-                            .frame(width: 16, height: 16)
-                            .background(Color.white.opacity(0.07))
-                            .clipShape(Circle())
+                    VStack(spacing: 6) {
+                        Button(action: { openAgentTarget(agent) }) {
+                            Image(systemName: "arrow.up.right")
+                                .font(.system(size: 8, weight: .medium))
+                                .foregroundColor(Color(hex: "#5F646D"))
+                                .frame(width: 16, height: 16)
+                                .background(Color.white.opacity(0.07))
+                                .clipShape(Circle())
+                                .contentShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Open")
+                        Button(action: { UsageMonitor.shared.forceRefresh() }) {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 8, weight: .medium))
+                                .foregroundColor(Color(hex: "#5F646D"))
+                                .frame(width: 16, height: 16)
+                                .background(Color.white.opacity(0.07))
+                                .clipShape(Circle())
+                                .contentShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Refresh usage")
+                        .help("Submits a Grok command to force update every coding agent's usage limits.")
                     }
-                    .buttonStyle(.plain)
                     .padding(.top, 8)
                     .padding(.trailing, 10)
                     .frame(maxWidth: .infinity, alignment: .trailing)
-                }
-
-                // Model name, then that model's usage rings, under the white blob.
-                #if !APPSTORE
-                let hideMeters = showingN8nDetail || activeDiffId != nil || state.showingPlanDetail
-                #else
-                let hideMeters = showingN8nDetail || activeDiffId != nil
-                #endif
-                if !hideMeters {
-                    UsageRingStack()
-                        .padding(.leading, UsageBehavior.stackLeading)
-                        .padding(.top, UsageBehavior.stackTop)
+                    .zIndex(2)
                 }
             }
-            .frame(width: TerminalBehavior.overviewLeftCard, alignment: .topLeading)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .clipped()
+
+            if !hidesUsage {
+                HomeAudioShelf()
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, UsageBehavior.playerBottom)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                    .frame(height: UsageBehavior.shelfClearance, alignment: .bottom)
+                    .clipped()
+            }
+            }
+            .frame(width: TerminalBehavior.overviewLeftCard, alignment: .top)
             .frame(maxHeight: .infinity, alignment: .top)
-            .overlay(alignment: .bottom) {
-                #if !APPSTORE
-                let hideShelf = showingN8nDetail || activeDiffId != nil || state.showingPlanDetail
-                #else
-                let hideShelf = showingN8nDetail || activeDiffId != nil
-                #endif
-                if !hideShelf {
-                    HomeAudioShelf()
-                        .padding(.horizontal, 10)
-                        .padding(.bottom, 6)
-                }
-            }
 
-            // Right card: four Terminal windows and the prompt
+            // Right card: four Terminal windows and the prompt.
+            // The faces stay at the top right. A longer usage list does not drag them down.
             CardBackground(wash: nil) {
                 TerminalClusterView()
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onChange(of: state.focusId) { _, new in
             showingN8nDetail = false
             activeDiffId = nil
@@ -238,6 +266,8 @@ struct OverviewView: View {
     private func openAgentTarget(_ task: AgentTask?) {
         guard let task else { return }
         switch task.id {
+        case "agent_grokbot":
+            GrokBotApp.open()
         case "integration_claude":
             if ClaudeHost.activate(task.hostApp) { return }
             let vscodeBundleId = "com.microsoft.VSCode"
@@ -338,32 +368,52 @@ struct UsageRingStack: View {
         })
     }
 
+    private var listedRows: [(service: UsageService, row: UsageRow)] {
+        UsageBehavior.services.flatMap { service in
+            UsageBehavior.rows(service: service, levels: monitor.levels(service)).map { (service, $0) }
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: UsageBehavior.gap) {
             header
-            ForEach(UsageBehavior.services, id: \.self) { service in
-                ForEach(UsageBehavior.rows(service: service, levels: monitor.levels(service))) { row in
-                    HStack(spacing: 2) {
-                        Circle().fill(Color(hex: service.brandHex)).frame(width: 6, height: 6)
-                        Text(row.model)
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(Color(hex: "#F5F6F8"))
-                            .lineLimit(1).minimumScaleFactor(0.8)
-                            .frame(width: UsageBehavior.nameWidth, alignment: .leading)
-                        ForEach(columns, id: \.self) { window in
-                            if let gate = UsageBehavior.placed(row: row, window: window) {
-                                clock(gate, service: service, width: UsageBehavior.columnWidth(gate.window))
-                            } else {
-                                Color.clear.frame(width: UsageBehavior.columnWidth(window), height: UsageBehavior.ring)
-                            }
+            GeometryReader { geo in
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: UsageBehavior.gap) {
+                        ForEach(Array(listedRows.enumerated()), id: \.offset) { _, item in
+                            modelRow(item.row, service: item.service)
                         }
                     }
-                    .frame(height: UsageBehavior.row)
+                }
+                .contentMargins(0, for: .scrollContent)
+                .frame(
+                    height: UsageBehavior.rowListHeight(rowCount: listedRows.count, offered: geo.size.height),
+                    alignment: .top
+                )
+            }
+        }
+        .frame(width: UsageBehavior.stackWidth, alignment: .topLeading)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .onAppear { monitor.start() }
+    }
+
+    private func modelRow(_ row: UsageRow, service: UsageService) -> some View {
+        HStack(spacing: 2) {
+            Circle().fill(Color(hex: service.brandHex)).frame(width: 6, height: 6)
+            Text(row.model)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color(hex: "#F5F6F8"))
+                .lineLimit(1).minimumScaleFactor(0.8)
+                .frame(width: UsageBehavior.nameWidth, alignment: .leading)
+            ForEach(columns, id: \.self) { window in
+                if let gate = UsageBehavior.placed(row: row, window: window) {
+                    clock(gate, service: service, width: UsageBehavior.columnWidth(gate.window))
+                } else {
+                    Color.clear.frame(width: UsageBehavior.columnWidth(window), height: UsageBehavior.ring)
                 }
             }
         }
-        .frame(width: UsageBehavior.stackWidth, alignment: .leading)
-        .onAppear { monitor.start() }
+        .frame(width: UsageBehavior.stackWidth, height: UsageBehavior.row, alignment: .leading)
     }
 
     private var header: some View {
@@ -423,17 +473,23 @@ struct UsageRingStack: View {
     @ViewBuilder
     private func refillDate(_ gate: UsageGate) -> some View {
         if let when = UsageBehavior.replenishReading(remaining: gate.remaining, at: gate.replenishes) {
-            VStack(alignment: .leading, spacing: 0) {
-                Text(when.day)
-                Text(when.time)
-            }
-            .font(.system(size: 10, weight: .medium))
-            .foregroundStyle(Color(hex: "#A7ABB3"))
-            .lineLimit(1)
-            .minimumScaleFactor(0.85)
-            .padding(.leading, UsageBehavior.dateGap)
-            .help("Refills \(when.day), \(when.time)")
+            clockText(when.day, when.time, help: "Refills \(when.day), \(when.time)")
+        } else if let when = UsageBehavior.savedReading(at: gate.savedAt) {
+            clockText(when.day, when.time, help: "Saved \(when.day), \(when.time)")
         }
+    }
+
+    private func clockText(_ day: String, _ time: String, help: String) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(day)
+            Text(time)
+        }
+        .font(.system(size: 10, weight: .medium))
+        .foregroundStyle(Color(hex: "#A7ABB3"))
+        .lineLimit(1)
+        .minimumScaleFactor(0.85)
+        .padding(.leading, UsageBehavior.dateGap)
+        .help(help)
     }
 }
 
@@ -487,7 +543,7 @@ struct HomeAudioShelf: View {
                 ) { board.togglePlayback() }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: 28)
+            .frame(height: UsageBehavior.playerRow)
             .clipped()
         }
     }
@@ -2035,6 +2091,25 @@ struct NoteView: View {
     }
 }
 
+/// Grok Bot on this Mac. The white blob opens this app when that pill is selected.
+enum GrokBotApp {
+    static let bundleId = "com.anysphere.sand"
+
+    static var isInstalled: Bool {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) != nil
+    }
+
+    static func open() {
+        if let running = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleId }) {
+            running.activate(options: .activateIgnoringOtherApps)
+            return
+        }
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) {
+            NSWorkspace.shared.openApplication(at: url, configuration: .init(), completionHandler: nil)
+        }
+    }
+}
+
 // MARK: - Integration card (overview left card when an integration pill is focused)
 
 struct IntegrationCardView: View {
@@ -2103,6 +2178,8 @@ struct IntegrationCardView: View {
             #endif
         case "agent_claude-desktop":
             return true  // nothing to install: the relay tags desktop sessions on its own
+        case "agent_grokbot":
+            return GrokBotApp.isInstalled
         case "integration_music":
             #if !APPSTORE
             return true  // Apple Music is always installed on macOS
@@ -2273,6 +2350,9 @@ struct IntegrationCardView: View {
         // Pills driven by hooks, never by a key: the idle card reports whether the
         // hooks are in place. integration_claude read "Connected · loading…" with
         // nothing left to load — a session replaces this card, it never resolves here.
+        if task.id == "agent_grokbot" {
+            return isConfigured ? String(localized: "Installed") : String(localized: "Not installed")
+        }
         let isHooks = task.id == "integration_claude" || task.id == "agent_gemini"
                    || task.id == "agent_antigravity"  || task.id == "agent_cursor"
                    || task.id == "agent_codex"        || task.id == "agent_copilot"
@@ -2460,6 +2540,11 @@ struct IntegrationCardView: View {
                             .font(.system(size: 11, weight: .medium))
                             .foregroundColor(Color(hex: task.color).opacity(0.7))
                             .buttonStyle(.plain)
+                    } else if task.id == "agent_grokbot" {
+                        Button("Open Grok Bot") { GrokBotApp.open() }
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(Color(hex: task.color).opacity(0.7))
+                            .buttonStyle(.plain)
                     } else if task.id == "agent_cursor" {
                         #if !APPSTORE
                         if let url = NSWorkspace.shared.urlForApplication(
@@ -2566,6 +2651,7 @@ struct IntegrationCardView: View {
                     if !isConfigured
                        && task.id != "agent_cursor"
                        && task.id != "agent_codex"
+                       && task.id != "agent_grokbot"
                        && task.id != "integration_music"
                        && task.id != "integration_mail" {
                         Button("Settings…") {

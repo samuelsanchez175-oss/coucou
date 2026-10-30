@@ -9,10 +9,11 @@ enum LiveActivityTests {
         testPausedMediaDoesNotLead()
         testUpdateAppearsOnlyForANewerOffer()
         testReleaseTagBecomesTheUpdateOffer()
+        testCheckForUpdateDownloadsThenAsks()
         testChargeLineShowsTheSpeed()
         testChargeSpeedWearsAColor()
         testSettingsKeepsTheMatchingNotchOpen()
-        print("Live activities: 9 cases passed")
+        print("Live activities: 10 cases passed")
     }
 
     /// The header gear opens the full settings window. It does not stop on the notch page.
@@ -244,6 +245,8 @@ enum LiveActivityTests {
         precondition(!publish.contains("offered: nil"), "the live line no longer ignores the published release")
         precondition(!publish.contains("URLSession"), "the two-second tick does not fetch a release")
         precondition(!publish.contains("releases/latest"), "the two-second tick does not fetch a release")
+        precondition(!publish.contains("downloadZip"), "the two-second tick does not download a release")
+        precondition(!publish.contains("lookForUpdate"), "the two-second tick does not look for an update")
 
         let start = sourceSlice(
             file: "NotchBuddy/Sources/App/NookBoard.swift",
@@ -281,6 +284,204 @@ enum LiveActivityTests {
         precondition(activities.contains("id: \"update\", enabled: true"), "New Update stays available to turn on")
     }
 
+    /// The header button downloads a newer Coucou.zip, then asks. Update asks Grok and does not install it.
+    static func testCheckForUpdateDownloadsThenAsks() {
+        let zip = "https://github.com/Louis-CFM/coucou/releases/download/v0.5.6/Coucou.zip"
+        precondition(LiveActivityBehavior.allowedDownloadURL(zip) == zip)
+        precondition(LiveActivityBehavior.allowedDownloadURL("https://example.com/Coucou.zip") == nil)
+        precondition(LiveActivityBehavior.allowedDownloadURL("https://github.com/samuelsanchez175-oss/coucou/releases/download/v9/Coucou.zip") == nil)
+        precondition(LiveActivityBehavior.allowedDownloadURL("http://github.com/Louis-CFM/coucou/releases/download/v0.5.6/Coucou.zip") == nil)
+        precondition(LiveActivityBehavior.allowedDownloadURL("https://github.com/Louis-CFM/coucou/releases/download/v0.5.6/Other.zip") == nil)
+        let cdn = URL(string: "https://release-assets.githubusercontent.com/github-production-release-asset/1")!
+        precondition(LiveActivityBehavior.allowsReleaseRedirect(cdn))
+        precondition(LiveActivityBehavior.allowsReleaseRedirect(URL(string: "https://example.com/Coucou.zip")!) == false)
+        precondition(LiveActivityBehavior.isZipHeader(Data([0x50, 0x4B, 0x03, 0x04, 0x00])))
+        precondition(LiveActivityBehavior.isZipHeader(Data("not a zip".utf8)) == false)
+
+        let body = Data("""
+        {"tag_name":"v0.5.6","html_url":"https://github.com/Louis-CFM/coucou/releases/tag/v0.5.6","assets":[
+        {"name":"Other.zip","browser_download_url":"https://github.com/Louis-CFM/coucou/releases/download/v0.5.6/Other.zip"},
+        {"name":"Coucou.zip","browser_download_url":"https://github.com/Louis-CFM/coucou/releases/download/v0.5.6/Coucou.zip"}]}
+        """.utf8)
+        let offer = LiveActivityBehavior.publishedRelease(json: body)
+        precondition(offer?.version == "0.5.6")
+        precondition(offer?.download == zip)
+        precondition(LiveActivityBehavior.publishedRelease(json: Data(#"{"tag_name":"v0.1.2"}"#.utf8))?.download == nil)
+
+        let fresh = LiveActivityBehavior.lookup(installed: "0.3.0", offer: offer, savedFileExists: false)
+        guard case .download(let version, let url) = fresh else {
+            preconditionFailure("a newer release downloads, got \(String(describing: fresh))")
+        }
+        precondition(version == "0.5.6")
+        precondition(url == zip)
+
+        let saved = LiveActivityBehavior.lookup(installed: "0.3.0", offer: offer, savedFileExists: true)
+        guard case .ask(let asked) = saved else {
+            preconditionFailure("a saved zip asks again and does not download, got \(String(describing: saved))")
+        }
+        precondition(asked == "0.5.6")
+
+        let same = LiveActivityBehavior.lookup(installed: "0.5.6", offer: offer, savedFileExists: false)
+        guard case .current = same else {
+            preconditionFailure("the same version does not download")
+        }
+        let older = LiveActivityBehavior.PublishedRelease(version: "0.1.0", page: LiveActivityBehavior.releasesPage, download: zip)
+        let behind = LiveActivityBehavior.lookup(installed: "0.3.0", offer: older, savedFileExists: false)
+        guard case .current = behind else {
+            preconditionFailure("an older release does not download")
+        }
+        let bare = LiveActivityBehavior.PublishedRelease(version: "0.9.0", page: LiveActivityBehavior.releasesPage, download: nil)
+        let missing = LiveActivityBehavior.lookup(installed: "0.3.0", offer: bare, savedFileExists: false)
+        guard case .missingZip = missing else {
+            preconditionFailure("a newer release with no zip does not invent a download")
+        }
+
+        precondition(LiveActivityBehavior.asksGrok(.update))
+        precondition(LiveActivityBehavior.asksGrok(.saveForLater) == false)
+        precondition(LiveActivityBehavior.installsDownloadedApp(.update) == false)
+        precondition(LiveActivityBehavior.installsDownloadedApp(.saveForLater) == false)
+        let home = URL(fileURLWithPath: "/Users/samuel")
+        precondition(LiveActivityBehavior.localTree(home: home).path == "/Users/samuel/dev/coucou")
+        precondition(LiveActivityBehavior.grokExecutable(home: home).path == "/Users/samuel/.grok/bin/grok")
+        let brief = LiveActivityBehavior.reviewBrief(version: "0.5.6", zipPath: "/tmp/Coucou-0.5.6.zip")
+        precondition(brief.contains("original branch"))
+        precondition(brief.contains(LiveActivityBehavior.originalBranch))
+        precondition(brief.contains("/tmp/Coucou-0.5.6.zip"))
+        precondition(brief.contains("Do not regress the local Coucou"))
+        precondition(brief.contains("Do not replace /Applications/Coucou.app."))
+        precondition(brief.contains("Do not push."))
+        precondition(brief.contains("Then stop and wait."))
+        precondition(!brief.contains("ditto"))
+        let command = LiveActivityBehavior.reviewCommand(
+            repo: "/Users/samuel/dev/coucou",
+            grok: "/Users/samuel/.grok/bin/grok",
+            brief: brief
+        )
+        precondition(command.contains("--permission-mode plan"))
+        precondition(command.contains("--no-subagents"))
+        precondition(command.contains("'/Users/samuel/.grok/bin/grok'"))
+        precondition(command.contains("'/Users/samuel/dev/coucou'"))
+        precondition(command.contains("--verbatim"))
+        precondition(!command.contains("ditto"))
+        precondition(!command.contains("git push"))
+        precondition(!command.contains("git reset"))
+        precondition(!command.contains("git merge"))
+        precondition(!command.contains("git clean"))
+        precondition(LiveActivityBehavior.shellQuote("/tmp/a b") == "'/tmp/a b'")
+        precondition(LiveActivityBehavior.shellQuote("a'b") == "'a'\\''b'")
+
+        let header = sourceSlice(
+            file: "NotchBuddy/Sources/App/IslandRootView.swift",
+            from: "private var actions",
+            until: "struct TabButton"
+        )
+        precondition(header.contains("speaker.wave.2"))
+        precondition(header.contains("\"power\""))
+        precondition(header.contains("NSApplication.shared.terminate"))
+        precondition(header.contains("Quit"))
+        precondition(header.contains("arrow.triangle.2.circlepath"))
+        precondition(header.contains("lookForUpdate()"))
+        precondition(header.contains("Check for update"))
+        let speaker = header.range(of: "speaker.wave.2")
+        let power = header.range(of: "\"power\"")
+        let arrows = header.range(of: "arrow.triangle.2.circlepath")
+        precondition(speaker != nil && power != nil && arrows != nil)
+        precondition(speaker!.lowerBound < power!.lowerBound, "quit sits next to volume")
+        precondition(power!.lowerBound < arrows!.lowerBound, "the two arrows sit beside quit")
+
+        let look = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookBoard.swift",
+            from: "func lookForUpdate()",
+            until: "func askToApply"
+        )
+        precondition(look.contains("ReleaseProbe.latest"))
+        precondition(look.contains("ReleaseProbe.downloadZip"))
+        precondition(look.contains("askToApply"))
+        precondition(!look.contains("applyDownloadedUpdate"), "finding the update does not install it")
+        precondition(!look.contains("reviewDownloadedUpdate"), "finding the update does not open Grok")
+        precondition(!look.contains("terminate"), "finding the update does not quit Coucou")
+        precondition(!look.contains("ditto"), "finding the update does not unpack the zip")
+
+        let ask = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookBoard.swift",
+            from: "func askToApply",
+            until: "func answerUpdatePrompt"
+        )
+        precondition(ask.contains("zipReady: true"))
+        precondition(ask.contains("showUpdatePrompt"))
+        precondition(ask.contains("original GitHub release"))
+        precondition(ask.contains("asks Grok"))
+        precondition(ask.contains("does not replace Coucou"))
+        precondition(!ask.contains("replaces Coucou with this download"))
+        precondition(!ask.contains("applyDownloadedUpdate"), "showing the prompt does not install the download")
+        precondition(!ask.contains("reviewDownloadedUpdate"), "showing the prompt does not open Grok")
+        precondition(!ask.contains("runModal"))
+        precondition(!ask.contains("/Applications/Coucou.app"), "the prompt itself does not replace Coucou")
+        precondition(!ask.contains("ditto"))
+
+        let answer = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookBoard.swift",
+            from: "func answerUpdatePrompt",
+            until: "func reviewDownloadedUpdate"
+        )
+        precondition(answer.contains("asksGrok"))
+        precondition(answer.contains("installsDownloadedApp"))
+        let gate = answer.range(of: "asksGrok")
+        let reviewCall = answer.range(of: "reviewDownloadedUpdate")
+        precondition(gate != nil && reviewCall != nil)
+        precondition(gate!.lowerBound < reviewCall!.lowerBound, "Update is chosen before Grok is opened")
+        precondition(!answer.contains("applyDownloadedUpdate"))
+        precondition(!answer.contains("ditto"))
+        precondition(!answer.contains("terminate"))
+
+        let card = sourceSlice(
+            file: "NotchBuddy/Sources/App/IslandRootView.swift",
+            from: "struct UpdatePromptCard",
+            until: "struct TabButton"
+        )
+        precondition(card.contains("\"Update\""))
+        precondition(card.contains("\"Save for later\""))
+        precondition(card.contains("answerUpdatePrompt(.update)"))
+        precondition(card.contains("answerUpdatePrompt(.saveForLater)"))
+
+        let installer = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookBoard.swift",
+            from: "func reviewDownloadedUpdate",
+            until: "func stagedZipURL"
+        )
+        precondition(installer.contains("reviewCommand"))
+        precondition(installer.contains("do script"))
+        precondition(installer.contains("Coucou was not replaced."))
+        precondition(installer.contains("The download was not installed."))
+        precondition(!installer.contains("ditto"))
+        precondition(!installer.contains("terminate"))
+        precondition(!installer.contains("/Applications/Coucou.app"))
+        precondition(!installer.contains("applyDownloadedUpdate"))
+
+        let hold = sourceSlice(
+            file: "NotchBuddy/Sources/App/IslandWindowController.swift",
+            from: "fsm.isHeldOpen",
+            until: "voiceWoke"
+        )
+        precondition(hold.contains("updatePrompt"), "the update choice keeps the notch open")
+
+        let check = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookBoard.swift",
+            from: "func checkForUpdate()",
+            until: "func openReleasePage"
+        )
+        precondition(!check.contains("downloadZip"), "opening Coucou does not download the release")
+        precondition(!check.contains("askToApply"))
+
+        let start = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookBoard.swift",
+            from: "func start()",
+            until: "func notePointer"
+        )
+        precondition(start.contains("checkForUpdate()"))
+        precondition(!start.contains("lookForUpdate"), "opening Coucou does not download the release")
+    }
+
     /// Charging shows the battery icon, the percentage, and the watts. The word charging stays off.
     static func testChargeLineShowsTheSpeed() {
         precondition(NookLayout.batteryLine(percent: 40, charging: true, watts: 46.6) == "40% 47W")
@@ -296,8 +497,8 @@ enum LiveActivityTests {
             NookLayout.batteryLine(percent: 80, charging: true, watts: intoBattery) == "80% 29W",
             "2400 mA at 12000 mV was \(intoBattery ?? -1)"
         )
-        let flipped = NookLayout.chargingWatts(milliamps: -2400, millivolts: 12000, charging: true)
-        precondition(NookLayout.batteryLine(percent: 80, charging: true, watts: flipped) == "80% 29W")
+        let leaving = NookLayout.chargingWatts(milliamps: -2400, millivolts: 12000, charging: true)
+        precondition(leaving == 0, "a negative current is the pack supplying the Mac, was \(leaving.map { String($0) } ?? "nil")")
         precondition(NookLayout.chargingWatts(milliamps: -2546, millivolts: 11839, charging: false) == nil)
     }
 
@@ -317,13 +518,13 @@ enum LiveActivityTests {
             finishing.map(NookLayout.chargeSpeedText) == "4.3W",
             "a finishing charge of 4318 mW was \(finishing.map { String($0) } ?? "nil")"
         )
-        let negativeInflow = NookLayout.measuredChargeWatts(
-            batteryPowerMilliwatts: -46600,
+        let discharging = NookLayout.measuredChargeWatts(
+            batteryPowerMilliwatts: -3800,
             milliamps: nil,
             millivolts: nil,
             charging: true
         )
-        precondition(negativeInflow.map { ($0 * 10).rounded() / 10 } == 46.6)
+        precondition(discharging == 0, "a negative pack power is not a 3.8W charge")
         precondition(NookLayout.measuredChargeWatts(
             batteryPowerMilliwatts: 4500,
             milliamps: 360,
@@ -341,6 +542,16 @@ enum LiveActivityTests {
             milliamps: 338,
             millivolts: 12695,
             charging: true
+        )
+        let packPower = NookLayout.measuredChargeWatts(
+            batteryPowerMilliwatts: 27229,
+            milliamps: 2148,
+            millivolts: 12041,
+            charging: true
+        )
+        precondition(
+            packPower.map { Int(($0 * 1000).rounded()) } == 25864,
+            "2148 mA at 12041 mV is the charge rate, not the 27229 mW telemetry, was \(packPower.map { String($0) } ?? "nil")"
         )
         precondition(
             fromCurrent.map(NookLayout.chargeSpeedText) == "4.3W",
@@ -364,6 +575,13 @@ enum LiveActivityTests {
         precondition(NookLayout.displayedSpeedWatts(charging: false, packWatts: 0, supplyWatts: 60) == 0)
         precondition(NookLayout.displayedSpeedWatts(charging: false, packWatts: nil, supplyWatts: 60) == nil, "a missing reading must not become the adapter contract")
         precondition(NookLayout.displayedSpeedWatts(charging: false, packWatts: nil, supplyWatts: nil) == nil)
+        let fromTheCable = NookLayout.shownChargeWatts(inputMilliwatts: 13808, packWatts: 3.8)
+        precondition(
+            fromTheCable.map { Int(($0 * 1000).rounded()) } == 13808,
+            "the corner shows the watts on the cable, not the 3.8W leaving the pack, was \(fromTheCable.map { String($0) } ?? "nil")"
+        )
+        precondition(NookLayout.shownChargeWatts(inputMilliwatts: nil, packWatts: 4.318) == 4.318, "a missing port reading keeps the pack watts")
+        precondition(NookLayout.shownChargeWatts(inputMilliwatts: 0, packWatts: 4.3) == 4.3)
         precondition(NookLayout.chargingWatts(milliamps: 65535, millivolts: 12000, charging: true) == nil)
         let cluster = sourceSlice(
             file: "NotchBuddy/Sources/App/TerminalNotchView.swift",
@@ -383,12 +601,26 @@ enum LiveActivityTests {
             from: "private static func powerSample",
             until: "private static func adapterWatts"
         )
-        precondition(probe.contains("BatteryPower"), "the charge rate comes from battery power")
-        precondition(probe.contains("measuredChargeWatts"), "battery power is converted in milliwatts")
-        precondition(!probe.contains("SystemPowerIn"), "system draw is not the charge rate")
-        precondition(!probe.contains("\"Watts\""), "the adapter contract is not the charge rate")
+        precondition(probe.contains("IPDInputPower"), "the corner shows the watts coming in on the cable")
+        precondition(probe.contains("shownChargeWatts"), "the cable watts are the number on the card")
+        precondition(probe.contains("SystemPowerIn"), "the telemetry input is the fallback")
+        precondition(probe.contains("BatteryPower"), "pack power remains the fallback")
+        precondition(!probe.contains("\"Watts\""), "the adapter's rated watts are not the charge rate")
         precondition(line.contains("chargeSpeedText"), "the wattage is a different string")
         precondition(line.contains("batterySymbol"), "the battery indicator is missing")
+        let clock = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookBoard.swift",
+            from: "func startBatteryClock",
+            until: "private func tick"
+        )
+        precondition(clock.contains("readBattery"), "the charge rate has its own read")
+        precondition(clock.contains("10_000_000_000"), "the charge rate is read every 10 seconds")
+        let tick = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookBoard.swift",
+            from: "private func tick",
+            until: "private func refreshMedia"
+        )
+        precondition(tick.contains("readBattery"), "a quiet notch tick still reads the charge rate sooner")
     }
 
     /// Each settings tab keeps the notch on the area that tab edits.

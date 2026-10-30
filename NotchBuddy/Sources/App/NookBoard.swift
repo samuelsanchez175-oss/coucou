@@ -6,6 +6,7 @@ import Foundation
 import IOBluetooth
 import IOKit
 import IOKit.ps
+import os
 
 struct NookTodo: Codable, Equatable, Identifiable {
     var id: UUID
@@ -25,7 +26,7 @@ final class NookBoard: ObservableObject {
     @Published var mediaIsPlaying = false
     /// The app is sending audio even when Now Playing leaves the rate at zero.
     @Published var mediaOutputRunning = false
-    /// Right wing of the closed notch for the thumbnail and waveform. The left matches it.
+    /// Right wing of the closed notch while a video's waveform is showing. The left matches it.
     @Published var mediaWing: CGFloat = 0
     /// music, spotify, or youtube when the session belongs to that app.
     @Published var mediaPlatform: String?
@@ -94,6 +95,9 @@ final class NookBoard: ObservableObject {
 
     private let defaults = UserDefaults.standard
     private var loop: Task<Void, Never>?
+    /// Charge-rate samples. Separate from the notch tick so a slow calendar
+    /// or media refresh cannot leave the wattage stale for more than 10 seconds.
+    private var batteryLoop: Task<Void, Never>?
     private var tickCount = 0
     private var askedCalendar = false
     private var shortcutsLoaded = false
@@ -114,6 +118,10 @@ final class NookBoard: ObservableObject {
     @Published private(set) var releasePage: String?
     @Published private(set) var updateChecking = false
     @Published private(set) var updateChecked = false
+    /// True while Coucou.zip is downloading.
+    @Published private(set) var updateDownloading = false
+    /// The prompt after a check. Update is offered only when a zip is saved.
+    @Published var updatePrompt: UpdatePromptState?
     private var updateGeneration = 0
     private var updateTask: Task<Void, Never>?
     private var persistReady = false
@@ -146,6 +154,7 @@ final class NookBoard: ObservableObject {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.publish() }
         }
+        startBatteryClock()
         loop = Task { [weak self] in
             while let self, !Task.isCancelled {
                 await self.tick()
@@ -819,6 +828,19 @@ final class NookBoard: ObservableObject {
         defaults.set(app.bundleID, forKey: "nook.lastQuickApp")
     }
 
+    /// Reads the pack power every 10 seconds. The two-second notch tick also
+    /// reads it, so a quiet tick stays faster than this clock.
+    private func startBatteryClock() {
+        guard batteryLoop == nil else { return }
+        batteryLoop = Task { [weak self] in
+            while let self, !Task.isCancelled {
+                self.readBattery()
+                self.publish()
+                try? await Task.sleep(nanoseconds: 10_000_000_000)
+            }
+        }
+    }
+
     // MARK: - Tick
 
     private func tick() async {
@@ -1012,6 +1034,157 @@ final class NookBoard: ObservableObject {
         NSWorkspace.shared.open(url)
     }
 
+    /// Finds a newer GitHub release and downloads Coucou.zip. It does not replace Coucou.
+    func lookForUpdate() {
+        guard !updateChecking, !updateDownloading else { return }
+        updateGeneration += 1
+        let generation = updateGeneration
+        updateTask?.cancel()
+        updateChecking = true
+        updateTask = Task { @MainActor [weak self] in
+            let offer = await ReleaseProbe.latest()
+            guard let self, generation == self.updateGeneration else { return }
+            if let offer {
+                self.offeredVersion = offer.version
+                self.releasePage = offer.page
+            }
+            self.updateChecking = false
+            self.updateChecked = true
+            self.publish()
+            let installed = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+            let saved = offer.flatMap { self.stagedZipURL(version: $0.version) }
+            let savedFileExists = saved.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+            switch LiveActivityBehavior.lookup(
+                installed: installed, offer: offer, savedFileExists: savedFileExists
+            ) {
+            case .current:
+                self.sayUpdate("This is the latest version.")
+            case .missingZip(let version):
+                self.sayUpdate("Version \(version) is available, and Coucou could not find the download.")
+            case .ask(let version):
+                guard let saved else { return }
+                self.updateDownloading = true
+                self.askToApply(version: version, zip: saved)
+                self.updateDownloading = false
+            case .download(let version, let url):
+                guard let dest = self.stagedZipURL(version: version) else { return }
+                self.updateDownloading = true
+                let ok = await ReleaseProbe.downloadZip(from: url, to: dest)
+                guard generation == self.updateGeneration else { return }
+                guard ok else {
+                    self.updateDownloading = false
+                    self.sayUpdate("Coucou could not download the update.")
+                    return
+                }
+                self.keepOnly(version: version)
+                self.askToApply(version: version, zip: dest)
+                self.updateDownloading = false
+            }
+            self.updateTask = nil
+        }
+    }
+
+    /// The download is already on disk. Showing this prompt does not replace Coucou.
+    private var pendingUpdateZip: URL?
+    private var pendingUpdateVersion: String?
+
+    private func askToApply(version: String, zip: URL) {
+        pendingUpdateZip = zip
+        pendingUpdateVersion = version
+        updatePrompt = UpdatePromptState(
+            title: "Version \(version) is downloaded.",
+            detail: "This download is the original GitHub release. Your Coucou on this Mac is different. Update asks Grok to compare them and does not replace Coucou. Save for later keeps the download.",
+            zipReady: true
+        )
+        NotificationCenter.default.post(name: .showUpdatePrompt, object: nil)
+    }
+
+    /// Update asks Grok to compare the download with the local tree. Save for later leaves the download on disk.
+    func answerUpdatePrompt(_ choice: LiveActivityBehavior.UpdatePromptChoice) {
+        let zip = pendingUpdateZip
+        let version = pendingUpdateVersion
+        updatePrompt = nil
+        pendingUpdateZip = nil
+        pendingUpdateVersion = nil
+        updateDownloading = false
+        guard LiveActivityBehavior.asksGrok(choice), let zip, let version else { return }
+        guard LiveActivityBehavior.installsDownloadedApp(choice) == false else { return }
+        reviewDownloadedUpdate(version: version, zip: zip)
+    }
+
+    func dismissUpdatePrompt() {
+        updatePrompt = nil
+        pendingUpdateZip = nil
+        pendingUpdateVersion = nil
+        updateDownloading = false
+    }
+
+    /// Opens Grok on the local tree. The downloaded zip is named in the brief and is not installed.
+    private func reviewDownloadedUpdate(version: String, zip: URL) {
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser
+        let repo = LiveActivityBehavior.localTree(home: home)
+        let grok = LiveActivityBehavior.grokExecutable(home: home)
+        guard fm.fileExists(atPath: repo.appendingPathComponent(".git").path) else {
+            sayUpdate("Coucou could not find the local version. The download was not installed.")
+            return
+        }
+        guard fm.fileExists(atPath: grok.path) else {
+            sayUpdate("Coucou could not find Grok. The download was not installed.")
+            return
+        }
+        let brief = LiveActivityBehavior.reviewBrief(version: version, zipPath: zip.path)
+        let note = zip.deletingLastPathComponent().appendingPathComponent("Coucou-\(version)-review.txt")
+        try? brief.write(to: note, atomically: true, encoding: .utf8)
+        let command = LiveActivityBehavior.reviewCommand(repo: repo.path, grok: grok.path, brief: brief)
+        guard openGrokReview(command) else {
+            sayUpdate("Coucou could not open Grok. The download was not installed.")
+            return
+        }
+        sayUpdate("Grok is comparing version \(version) with your local Coucou. Coucou was not replaced.")
+    }
+
+    /// A new Terminal window. Other windows are left where they are.
+    private func openGrokReview(_ command: String) -> Bool {
+        let script = """
+        on run argv
+          set cmd to item 1 of argv
+          tell application "Terminal"
+            do script cmd
+          end tell
+          return "ok"
+        end run
+        """
+        return OSAScript.run(script, args: [command]) == "ok"
+    }
+
+    private func stagedZipURL(version: String) -> URL? {
+        guard !version.isEmpty, version.allSatisfy({ $0.isNumber || $0 == "." }) else { return nil }
+        guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            return nil
+        }
+        return base
+            .appendingPathComponent("Coucou", isDirectory: true)
+            .appendingPathComponent("Updates", isDirectory: true)
+            .appendingPathComponent("Coucou-\(version).zip")
+    }
+
+    private func keepOnly(version: String) {
+        guard let folder = stagedZipURL(version: version)?.deletingLastPathComponent(),
+              let names = try? FileManager.default.contentsOfDirectory(atPath: folder.path) else { return }
+        let keep = "Coucou-\(version).zip"
+        for name in names where name.hasPrefix("Coucou-") && name.hasSuffix(".zip") && name != keep {
+            try? FileManager.default.removeItem(at: folder.appendingPathComponent(name))
+        }
+    }
+
+    private func sayUpdate(_ message: String) {
+        pendingUpdateZip = nil
+        pendingUpdateVersion = nil
+        updatePrompt = UpdatePromptState(title: message, detail: "", zipReady: false)
+        NotificationCenter.default.post(name: .showUpdatePrompt, object: nil)
+    }
+
     private func publish() {
         let prefs = NookPreferences.shared
         let installed = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
@@ -1054,11 +1227,12 @@ final class NookBoard: ObservableObject {
             extra = 0
         }
         if extra != restingExtra { restingExtra = extra }
-        let showShelf = NookPlayback.showsOnClosedNotch(
+        let showShelf = NookPlayback.showsWaveOnClosedNotch(
             bundleID: mediaBundleID,
             displayName: mediaDisplayName,
             title: mediaTitle,
-            playing: mediaIsPlaying
+            playing: mediaIsPlaying,
+            outputRunning: mediaOutputRunning
         )
         let wing = NookPlayback.mediaWingWidth(showing: showShelf)
         if wing != mediaWing { mediaWing = wing }
@@ -1286,6 +1460,278 @@ enum AudioOutputProbe {
     }
 }
 
+/// Seven levels, 0…1, from the sound coming out of the speakers.
+/// The tap stays unmuted, so playback is not silenced.
+final class PlaybackWave: @unchecked Sendable {
+    static let shared = PlaybackWave()
+
+    private let lock = OSAllocatedUnfairLock(initialState: [Float](repeating: 0, count: 7))
+    private let queue = DispatchQueue(label: "coucou.playback-wave", qos: .userInteractive)
+    private var hold = [Float](repeating: 0, count: 7)
+    private var next = [Float](repeating: 0, count: 7)
+    private var ceiling: Float = 0.05
+    private var tapID = AudioObjectID(kAudioObjectUnknown)
+    private var aggregateID = AudioDeviceID(0)
+    private var ioProc: AudioDeviceIOProcID?
+    private var running = false
+    private var starting = false
+    private var attempts = 0
+    private var generation = 0
+
+    var levels: [Float] { lock.withLock { $0 } }
+
+    func start() {
+        guard !running, !starting else { return }
+        starting = true
+        let token = generation
+        if attempts == 0 {
+            FileManager.default.createFile(atPath: Self.statusPath, contents: Data())
+        }
+        attempts += 1
+        note("attempt \(attempts)")
+        guard let outputUID = Self.defaultOutputUID(), !outputUID.isEmpty else {
+            note("output missing")
+            finishStart(ok: false, token: token)
+            return
+        }
+        let description = CATapDescription(stereoGlobalTapButExcludeProcesses: [AudioObjectID]())
+        description.name = "Coucou"
+        description.isPrivate = true
+        description.muteBehavior = .unmuted
+        let tapUID = description.uuid.uuidString
+        var created = AudioObjectID(kAudioObjectUnknown)
+        let tapStatus = AudioHardwareCreateProcessTap(description, &created)
+        note("tap \(tapStatus) id \(created)")
+        guard tapStatus == noErr, created != kAudioObjectUnknown else {
+            finishStart(ok: false, token: token)
+            return
+        }
+        tapID = created
+        let aggregate: [String: Any] = [
+            kAudioAggregateDeviceNameKey: "Coucou",
+            kAudioAggregateDeviceUIDKey: "fr.louisraille.NotchBuddy.wave.\(UUID().uuidString)",
+            kAudioAggregateDeviceMainSubDeviceKey: outputUID,
+            kAudioAggregateDeviceIsPrivateKey: 1,
+            kAudioAggregateDeviceIsStackedKey: 0,
+            kAudioAggregateDeviceTapAutoStartKey: 1,
+            kAudioAggregateDeviceSubDeviceListKey: [
+                [kAudioSubDeviceUIDKey: outputUID]
+            ],
+            kAudioAggregateDeviceTapListKey: [
+                [
+                    kAudioSubTapUIDKey: tapUID,
+                    kAudioSubTapDriftCompensationKey: 1
+                ]
+            ]
+        ]
+        var aggregateDevice = AudioDeviceID(0)
+        let aggregateStatus = AudioHardwareCreateAggregateDevice(aggregate as CFDictionary, &aggregateDevice)
+        note("aggregate \(aggregateStatus) id \(aggregateDevice)")
+        guard aggregateStatus == noErr, aggregateDevice != 0 else {
+            AudioHardwareDestroyProcessTap(tapID)
+            tapID = AudioObjectID(kAudioObjectUnknown)
+            finishStart(ok: false, token: token)
+            return
+        }
+        aggregateID = aggregateDevice
+        noteFormat(aggregateDevice)
+        var proc: AudioDeviceIOProcID?
+        let made = AudioDeviceCreateIOProcIDWithBlock(&proc, aggregateDevice, queue) { [weak self] _, input, _, output, _ in
+            self?.ingest(input, and: output)
+        }
+        note("ioproc \(made)")
+        guard made == noErr, let proc else {
+            stopHardware()
+            finishStart(ok: false, token: token)
+            return
+        }
+        ioProc = proc
+        let started = AudioDeviceStart(aggregateDevice, proc)
+        note("deviceStart \(started)")
+        guard started == noErr else {
+            stopHardware()
+            finishStart(ok: false, token: token)
+            return
+        }
+        running = true
+        attempts = 0
+        finishStart(ok: true, token: token)
+    }
+
+    /// A denied tap prompt returns before the shelf can try again.
+    private func finishStart(ok: Bool, token: Int) {
+        starting = false
+        guard !ok, token == generation, attempts < 4 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            guard let self, self.generation == token else { return }
+            self.start()
+        }
+    }
+
+    func stop() {
+        generation += 1
+        attempts = 0
+        stopHardware()
+        hold = [Float](repeating: 0, count: 7)
+        ceiling = 0.05
+        lock.withLock { $0 = [Float](repeating: 0, count: 7) }
+    }
+
+    private func stopHardware() {
+        running = false
+        if aggregateID != 0, let proc = ioProc {
+            AudioDeviceStop(aggregateID, proc)
+            AudioDeviceDestroyIOProcID(aggregateID, proc)
+        }
+        ioProc = nil
+        if aggregateID != 0 {
+            AudioHardwareDestroyAggregateDevice(aggregateID)
+            aggregateID = 0
+        }
+        if tapID != kAudioObjectUnknown {
+            AudioHardwareDestroyProcessTap(tapID)
+            tapID = AudioObjectID(kAudioObjectUnknown)
+        }
+    }
+
+    /// The loudest buffer is the tap. A silent microphone stream does not flatten the bars.
+    /// The tap can arrive on either side of the aggregate, so both sides are read.
+    private func ingest(_ input: UnsafePointer<AudioBufferList>, and output: UnsafeMutablePointer<AudioBufferList>) {
+        let first = loudest(input)
+        let second = loudest(UnsafePointer(output))
+        let chosen: (UnsafeMutablePointer<Float>, Int, Int)?
+        switch (first, second) {
+        case let (a?, b?) where b.peak > a.peak:
+            chosen = (b.pointer, b.frames, b.channels)
+        case let (a?, _):
+            chosen = (a.pointer, a.frames, a.channels)
+        case let (nil, b?):
+            chosen = (b.pointer, b.frames, b.channels)
+        default:
+            chosen = nil
+        }
+        guard let chosen else { return }
+        fold(chosen.0, frames: chosen.1, channels: chosen.2)
+    }
+
+    private struct Slice {
+        var pointer: UnsafeMutablePointer<Float>
+        var frames: Int
+        var channels: Int
+        var peak: Float
+    }
+
+    private func loudest(_ list: UnsafePointer<AudioBufferList>) -> Slice? {
+        let buffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: list))
+        var best: Slice?
+        for buffer in buffers {
+            guard let raw = buffer.mData, buffer.mNumberChannels > 0 else { continue }
+            let channels = Int(buffer.mNumberChannels)
+            let floats = Int(buffer.mDataByteSize) / MemoryLayout<Float>.size
+            let frames = floats / channels
+            guard frames > 7 else { continue }
+            let pointer = raw.assumingMemoryBound(to: Float.self)
+            var peak: Float = 0
+            let step = max(1, frames / 48)
+            var frame = 0
+            while frame < frames {
+                let base = frame * channels
+                var sample = abs(pointer[base])
+                if channels > 1 { sample = max(sample, abs(pointer[base + 1])) }
+                if sample > peak { peak = sample }
+                frame += step
+            }
+            if peak >= (best?.peak ?? -1) {
+                best = Slice(pointer: pointer, frames: frames, channels: channels, peak: peak)
+            }
+        }
+        return best
+    }
+
+    private func fold(_ pointer: UnsafeMutablePointer<Float>, frames: Int, channels: Int) {
+        let chunk = frames / 7
+        guard chunk > 0 else { return }
+        for bar in 0..<7 {
+            let start = bar * chunk
+            let end = bar == 6 ? frames : start + chunk
+            var peak: Float = 0
+            let step = max(1, (end - start) / 32)
+            var frame = start
+            while frame < end {
+                let base = frame * channels
+                var sample = abs(pointer[base])
+                if channels > 1 { sample = max(sample, abs(pointer[base + 1])) }
+                if sample > peak { peak = sample }
+                frame += step
+            }
+            let previous = hold[bar]
+            hold[bar] = peak > previous ? peak : previous * 0.84
+        }
+        let local = hold.max() ?? 0
+        ceiling = max(local, ceiling * 0.992)
+        let scale = max(ceiling, 0.02)
+        for bar in 0..<7 {
+            next[bar] = min(1, hold[bar] / scale)
+        }
+        let published = next
+        lock.withLock { $0 = published }
+    }
+
+    private static let statusPath = "/tmp/coucou-wave-status.txt"
+
+    private func note(_ line: String) {
+        guard let data = (line + "\n").data(using: .utf8) else { return }
+        if let handle = FileHandle(forWritingAtPath: Self.statusPath) {
+            _ = try? handle.seekToEnd()
+            try? handle.write(contentsOf: data)
+            try? handle.close()
+        } else {
+            FileManager.default.createFile(atPath: Self.statusPath, contents: data)
+        }
+    }
+
+    private func noteFormat(_ device: AudioDeviceID) {
+        var format = AudioStreamBasicDescription()
+        var size = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreamFormat,
+            mScope: kAudioDevicePropertyScopeInput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let status = AudioObjectGetPropertyData(device, &address, 0, nil, &size, &format)
+        note(String(
+            format: "format %d rate %.0f ch %u bits %u flags %u",
+            status,
+            format.mSampleRate,
+            format.mChannelsPerFrame,
+            format.mBitsPerChannel,
+            format.mFormatFlags
+        ))
+    }
+
+    private static func defaultOutputUID() -> String? {
+        var device = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let system = AudioObjectID(kAudioObjectSystemObject)
+        guard AudioObjectGetPropertyData(system, &address, 0, nil, &size, &device) == noErr, device != 0 else {
+            return nil
+        }
+        address.mSelector = kAudioDevicePropertyDeviceUID
+        var raw: Unmanaged<CFString>?
+        size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        let status = withUnsafeMutablePointer(to: &raw) { pointer in
+            AudioObjectGetPropertyData(device, &address, 0, nil, &size, pointer)
+        }
+        guard status == noErr, let raw else { return nil }
+        return raw.takeRetainedValue() as String
+    }
+}
+
 enum NowPlayingProbe {
     struct Snap: Sendable {
         var title: String
@@ -1497,7 +1943,7 @@ enum NowPlayingBridge {
     private nonisolated(unsafe) static let box = Box()
 
     private static let script: String = {
-        let encoded = "aW1wb3J0IERhcndpbgppbXBvcnQgRm91bmRhdGlvbgoKbGV0IGZyYW1ld29ya1BhdGggPSAiL1N5c3RlbS9MaWJyYXJ5L1ByaXZhdGVGcmFtZXdvcmtzL01lZGlhUmVtb3RlLmZyYW1ld29yay9NZWRpYVJlbW90ZSIKbGV0IGFydEZpbGUgPSAiL3RtcC9jb3Vjb3Utbm93LXBsYXlpbmcuanBnIgoKZnVuYyBzeW1ib2w8VD4oXyBoYW5kbGU6IFVuc2FmZU11dGFibGVSYXdQb2ludGVyLCBfIG5hbWU6IFN0cmluZykgLT4gVD8gewogICAgZ3VhcmQgbGV0IHJhdyA9IGRsc3ltKGhhbmRsZSwgbmFtZSkgZWxzZSB7IHJldHVybiBuaWwgfQogICAgcmV0dXJuIHVuc2FmZUJpdENhc3QocmF3LCB0bzogVC5zZWxmKQp9CgpmdW5jIHN0cmluZ0tleShfIGhhbmRsZTogVW5zYWZlTXV0YWJsZVJhd1BvaW50ZXIsIF8gbmFtZTogU3RyaW5nKSAtPiBTdHJpbmcgewogICAgZ3VhcmQgbGV0IHJhdyA9IGRsc3ltKGhhbmRsZSwgbmFtZSkgZWxzZSB7IHJldHVybiBuYW1lIH0KICAgIHJldHVybiByYXcubG9hZChhczogQ0ZTdHJpbmc/LnNlbGYpLm1hcCB7ICQwIGFzIFN0cmluZyB9ID8/IG5hbWUKfQoKZnVuYyBlbWl0KF8gb2JqZWN0OiBbU3RyaW5nOiBBbnldKSB7CiAgICBndWFyZCBsZXQgZGF0YSA9IHRyeT8gSlNPTlNlcmlhbGl6YXRpb24uZGF0YSh3aXRoSlNPTk9iamVjdDogb2JqZWN0KSwKICAgICAgICAgIGxldCBsaW5lID0gU3RyaW5nKGRhdGE6IGRhdGEsIGVuY29kaW5nOiAudXRmOCkgZWxzZSB7CiAgICAgICAgcHJpbnQoIntcIm9rXCI6ZmFsc2V9IikKICAgICAgICBmZmx1c2goc3Rkb3V0KQogICAgICAgIHJldHVybgogICAgfQogICAgcHJpbnQobGluZSkKICAgIGZmbHVzaChzdGRvdXQpCn0KCmd1YXJkIGxldCBoYW5kbGUgPSBkbG9wZW4oZnJhbWV3b3JrUGF0aCwgUlRMRF9OT1cpIGVsc2UgewogICAgd2hpbGUgdHJ1ZSB7CiAgICAgICAgZW1pdChbIm9rIjogZmFsc2VdKQogICAgICAgIFRocmVhZC5zbGVlcChmb3JUaW1lSW50ZXJ2YWw6IDEpCiAgICB9Cn0KCnR5cGVhbGlhcyBJbmZvRm4gPSBAY29udmVudGlvbihjKSAoRGlzcGF0Y2hRdWV1ZSwgQGVzY2FwaW5nIEBjb252ZW50aW9uKGJsb2NrKSAoQ0ZEaWN0aW9uYXJ5PykgLT4gVm9pZCkgLT4gVm9pZAp0eXBlYWxpYXMgQm9vbEZuID0gQGNvbnZlbnRpb24oYykgKERpc3BhdGNoUXVldWUsIEBlc2NhcGluZyBAY29udmVudGlvbihibG9jaykgKEJvb2wpIC0+IFZvaWQpIC0+IFZvaWQKdHlwZWFsaWFzIFBJREZuID0gQGNvbnZlbnRpb24oYykgKERpc3BhdGNoUXVldWUsIEBlc2NhcGluZyBAY29udmVudGlvbihibG9jaykgKEludDMyKSAtPiBWb2lkKSAtPiBWb2lkCnR5cGVhbGlhcyBDbGllbnRzRm4gPSBAY29udmVudGlvbihjKSAoRGlzcGF0Y2hRdWV1ZSwgQGVzY2FwaW5nIEBjb252ZW50aW9uKGJsb2NrKSAoQ0ZBcnJheT8pIC0+IFZvaWQpIC0+IFZvaWQKdHlwZWFsaWFzIFRleHRGbiA9IEBjb252ZW50aW9uKGMpIChBbnlPYmplY3QpIC0+IENGU3RyaW5nPwp0eXBlYWxpYXMgUGlkT2ZGbiA9IEBjb252ZW50aW9uKGMpIChBbnlPYmplY3QpIC0+IEludDMyCnR5cGVhbGlhcyBTZW5kRm4gPSBAY29udmVudGlvbihjKSAoVUludDMyLCBDRkRpY3Rpb25hcnk/KSAtPiBCb29sCnR5cGVhbGlhcyBTZWVrRm4gPSBAY29udmVudGlvbihjKSAoRG91YmxlKSAtPiBWb2lkCgpsZXQgZ2V0SW5mbzogSW5mb0ZuPyA9IHN5bWJvbChoYW5kbGUsICJNUk1lZGlhUmVtb3RlR2V0Tm93UGxheWluZ0luZm8iKQpsZXQgaXNQbGF5aW5nRm46IEJvb2xGbj8gPSBzeW1ib2woaGFuZGxlLCAiTVJNZWRpYVJlbW90ZUdldE5vd1BsYXlpbmdBcHBsaWNhdGlvbklzUGxheWluZyIpCmxldCBnZXRQSUQ6IFBJREZuPyA9IHN5bWJvbChoYW5kbGUsICJNUk1lZGlhUmVtb3RlR2V0Tm93UGxheWluZ0FwcGxpY2F0aW9uUElEIikKbGV0IGdldENsaWVudHM6IENsaWVudHNGbj8gPSBzeW1ib2woaGFuZGxlLCAiTVJNZWRpYVJlbW90ZUdldE5vd1BsYXlpbmdDbGllbnRzIikKbGV0IGJ1bmRsZU9mOiBUZXh0Rm4/ID0gc3ltYm9sKGhhbmRsZSwgIk1STm93UGxheWluZ0NsaWVudEdldEJ1bmRsZUlkZW50aWZpZXIiKQpsZXQgbmFtZU9mOiBUZXh0Rm4/ID0gc3ltYm9sKGhhbmRsZSwgIk1STm93UGxheWluZ0NsaWVudEdldERpc3BsYXlOYW1lIikKbGV0IHBpZE9mOiBQaWRPZkZuPyA9IHN5bWJvbChoYW5kbGUsICJNUk5vd1BsYXlpbmdDbGllbnRHZXRQcm9jZXNzSWRlbnRpZmllciIpCmxldCBzZW5kQ29tbWFuZDogU2VuZEZuPyA9IHN5bWJvbChoYW5kbGUsICJNUk1lZGlhUmVtb3RlU2VuZENvbW1hbmQiKQpsZXQgc2Vla1RvOiBTZWVrRm4/ID0gc3ltYm9sKGhhbmRsZSwgIk1STWVkaWFSZW1vdGVTZXRFbGFwc2VkVGltZSIpCmxldCBxdWV1ZSA9IERpc3BhdGNoUXVldWUobGFiZWw6ICJjb3Vjb3Uubm93cGxheWluZyIpCgpmdW5jIGhhbmRsZUNvbW1hbmQoXyBsaW5lOiBTdHJpbmcpIHsKICAgIGxldCBwYXJ0cyA9IGxpbmUuc3BsaXQoc2VwYXJhdG9yOiAiICIpCiAgICBsZXQgdmVyYiA9IHBhcnRzLmZpcnN0Lm1hcChTdHJpbmcuaW5pdCkgPz8gIiIKICAgIHN3aXRjaCB2ZXJiIHsKICAgIGNhc2UgInRvZ2dsZSI6CiAgICAgICAgXyA9IHNlbmRDb21tYW5kPygyLCBuaWwpCiAgICBjYXNlICJuZXh0IjoKICAgICAgICBfID0gc2VuZENvbW1hbmQ/KDQsIG5pbCkKICAgIGNhc2UgInByZXYiOgogICAgICAgIF8gPSBzZW5kQ29tbWFuZD8oNSwgbmlsKQogICAgY2FzZSAic2VlayI6CiAgICAgICAgaWYgcGFydHMuY291bnQgPiAxLCBsZXQgc2Vjb25kcyA9IERvdWJsZShwYXJ0c1sxXSkgewogICAgICAgICAgICBzZWVrVG8/KG1heCgwLCBzZWNvbmRzKSkKICAgICAgICB9CiAgICBkZWZhdWx0OgogICAgICAgIGJyZWFrCiAgICB9Cn0KCkRpc3BhdGNoUXVldWUuZ2xvYmFsKHFvczogLnV0aWxpdHkpLmFzeW5jIHsKICAgIHdoaWxlIGxldCBsaW5lID0gcmVhZExpbmUoc3RyaXBwaW5nTmV3bGluZTogdHJ1ZSkgewogICAgICAgIGhhbmRsZUNvbW1hbmQobGluZSkKICAgIH0KfQoKZnVuYyB0ZXh0KF8gdmFsdWU6IEFueT8pIC0+IFN0cmluZyB7CiAgICBndWFyZCBsZXQgcmF3ID0gdmFsdWUgYXM/IFN0cmluZyBlbHNlIHsgcmV0dXJuICIiIH0KICAgIHJldHVybiByYXcudHJpbW1pbmdDaGFyYWN0ZXJzKGluOiAud2hpdGVzcGFjZXNBbmROZXdsaW5lcykKfQoKZnVuYyBudW1iZXIoXyB2YWx1ZTogQW55PykgLT4gRG91YmxlIHsKICAgIGxldCBudW1iZXI6IERvdWJsZQogICAgaWYgbGV0IHZhbHVlID0gdmFsdWUgYXM/IE5TTnVtYmVyIHsKICAgICAgICBudW1iZXIgPSB2YWx1ZS5kb3VibGVWYWx1ZQogICAgfSBlbHNlIGlmIGxldCB2YWx1ZSA9IHZhbHVlIGFzPyBEb3VibGUgewogICAgICAgIG51bWJlciA9IHZhbHVlCiAgICB9IGVsc2UgewogICAgICAgIG51bWJlciA9IDAKICAgIH0KICAgIGlmIG51bWJlci5pc05hTiB8fCBudW1iZXIgPCAwIHsgcmV0dXJuIDAgfQogICAgcmV0dXJuIG51bWJlcgp9CgpmdW5jIHNuYXBzaG90KCkgewogICAgbGV0IHdhaXQgPSBEaXNwYXRjaFNlbWFwaG9yZSh2YWx1ZTogMCkKICAgIHZhciBpbmZvOiBOU0RpY3Rpb25hcnk/CiAgICBnZXRJbmZvPyhxdWV1ZSkgeyBkaWN0IGluCiAgICAgICAgaW5mbyA9IGRpY3QubWFwIHsgJDAgYXMgTlNEaWN0aW9uYXJ5IH0KICAgICAgICB3YWl0LnNpZ25hbCgpCiAgICB9CiAgICBndWFyZCBnZXRJbmZvICE9IG5pbCwgd2FpdC53YWl0KHRpbWVvdXQ6IC5ub3coKSArIDAuOCkgPT0gLnN1Y2Nlc3MsIGxldCBpbmZvIGVsc2UgewogICAgICAgIGVtaXQoWyJvayI6IGZhbHNlXSkKICAgICAgICByZXR1cm4KICAgIH0KICAgIGxldCB0aXRsZSA9IHRleHQoaW5mb1tzdHJpbmdLZXkoaGFuZGxlLCAia01STWVkaWFSZW1vdGVOb3dQbGF5aW5nSW5mb1RpdGxlIildKQogICAgZ3VhcmQgIXRpdGxlLmlzRW1wdHkgZWxzZSB7CiAgICAgICAgZW1pdChbIm9rIjogZmFsc2VdKQogICAgICAgIHJldHVybgogICAgfQogICAgdmFyIHBsYXlpbmcgPSBmYWxzZQogICAgaXNQbGF5aW5nRm4/KHF1ZXVlKSB7IHZhbHVlIGluCiAgICAgICAgcGxheWluZyA9IHZhbHVlCiAgICAgICAgd2FpdC5zaWduYWwoKQogICAgfQogICAgaWYgaXNQbGF5aW5nRm4gIT0gbmlsIHsgXyA9IHdhaXQud2FpdCh0aW1lb3V0OiAubm93KCkgKyAwLjQpIH0KICAgIHZhciBwaWQ6IEludDMyID0gMAogICAgZ2V0UElEPyhxdWV1ZSkgeyB2YWx1ZSBpbgogICAgICAgIHBpZCA9IHZhbHVlCiAgICAgICAgd2FpdC5zaWduYWwoKQogICAgfQogICAgaWYgZ2V0UElEICE9IG5pbCB7IF8gPSB3YWl0LndhaXQodGltZW91dDogLm5vdygpICsgMC40KSB9CiAgICB2YXIgYnVuZGxlID0gIiIKICAgIHZhciBuYW1lID0gIiIKICAgIGdldENsaWVudHM/KHF1ZXVlKSB7IGFycmF5IGluCiAgICAgICAgbGV0IGl0ZW1zID0gKGFycmF5IGFzPyBbQW55XSkgPz8gW10KICAgICAgICB2YXIgZmFsbGJhY2tCdW5kbGUgPSAiIgogICAgICAgIHZhciBmYWxsYmFja05hbWUgPSAiIgogICAgICAgIGZvciBpdGVtIGluIGl0ZW1zIHsKICAgICAgICAgICAgbGV0IG9iaiA9IGl0ZW0gYXMgQW55T2JqZWN0CiAgICAgICAgICAgIGxldCBpdGVtQnVuZGxlID0gYnVuZGxlT2Y/KG9iaikubWFwIHsgJDAgYXMgU3RyaW5nIH0gPz8gIiIKICAgICAgICAgICAgbGV0IGl0ZW1OYW1lID0gbmFtZU9mPyhvYmopLm1hcCB7ICQwIGFzIFN0cmluZyB9ID8/ICIiCiAgICAgICAgICAgIGxldCBpdGVtUElEID0gcGlkT2Y/KG9iaikgPz8gMAogICAgICAgICAgICBpZiBmYWxsYmFja0J1bmRsZS5pc0VtcHR5IHsKICAgICAgICAgICAgICAgIGZhbGxiYWNrQnVuZGxlID0gaXRlbUJ1bmRsZQogICAgICAgICAgICAgICAgZmFsbGJhY2tOYW1lID0gaXRlbU5hbWUKICAgICAgICAgICAgfQogICAgICAgICAgICBpZiBwaWQgIT0gMCAmJiBpdGVtUElEID09IHBpZCB7CiAgICAgICAgICAgICAgICBidW5kbGUgPSBpdGVtQnVuZGxlCiAgICAgICAgICAgICAgICBuYW1lID0gaXRlbU5hbWUKICAgICAgICAgICAgICAgIGJyZWFrCiAgICAgICAgICAgIH0KICAgICAgICB9CiAgICAgICAgaWYgYnVuZGxlLmlzRW1wdHkgewogICAgICAgICAgICBidW5kbGUgPSBmYWxsYmFja0J1bmRsZQogICAgICAgICAgICBuYW1lID0gZmFsbGJhY2tOYW1lCiAgICAgICAgfQogICAgICAgIHdhaXQuc2lnbmFsKCkKICAgIH0KICAgIGlmIGdldENsaWVudHMgIT0gbmlsIHsgXyA9IHdhaXQud2FpdCh0aW1lb3V0OiAubm93KCkgKyAwLjQpIH0KICAgIHZhciBwb3NpdGlvbiA9IG51bWJlcihpbmZvW3N0cmluZ0tleShoYW5kbGUsICJrTVJNZWRpYVJlbW90ZU5vd1BsYXlpbmdJbmZvRWxhcHNlZFRpbWUiKV0pCiAgICB2YXIgZHVyYXRpb24gPSBudW1iZXIoaW5mb1tzdHJpbmdLZXkoaGFuZGxlLCAia01STWVkaWFSZW1vdGVOb3dQbGF5aW5nSW5mb0R1cmF0aW9uIildKQogICAgaWYgZHVyYXRpb24gPiAxMDBfMDAwIHsgZHVyYXRpb24gLz0gMTAwMCB9CiAgICBpZiBwb3NpdGlvbiA+IDEwMF8wMDAgeyBwb3NpdGlvbiAvPSAxMDAwIH0KICAgIGxldCByYXRlID0gbnVtYmVyKGluZm9bc3RyaW5nS2V5KGhhbmRsZSwgImtNUk1lZGlhUmVtb3RlTm93UGxheWluZ0luZm9QbGF5YmFja1JhdGUiKV0pCiAgICB2YXIgYXJ0ID0gIiIKICAgIHZhciBzdGFtcCA9IDAKICAgIGxldCBhcnR3b3JrVmFsdWUgPSBpbmZvW3N0cmluZ0tleShoYW5kbGUsICJrTVJNZWRpYVJlbW90ZU5vd1BsYXlpbmdJbmZvQXJ0d29ya0RhdGEiKV0KICAgIGxldCBieXRlczogRGF0YT8KICAgIGlmIGxldCBkYXRhID0gYXJ0d29ya1ZhbHVlIGFzPyBEYXRhIHsKICAgICAgICBieXRlcyA9IGRhdGEKICAgIH0gZWxzZSBpZiBsZXQgZGF0YSA9IGFydHdvcmtWYWx1ZSBhcz8gTlNEYXRhIHsKICAgICAgICBieXRlcyA9IGRhdGEgYXMgRGF0YQogICAgfSBlbHNlIHsKICAgICAgICBieXRlcyA9IG5pbAogICAgfQogICAgaWYgbGV0IGJ5dGVzLCAhYnl0ZXMuaXNFbXB0eSB7CiAgICAgICAgdHJ5PyBieXRlcy53cml0ZSh0bzogVVJMKGZpbGVVUkxXaXRoUGF0aDogYXJ0RmlsZSkpCiAgICAgICAgYXJ0ID0gYXJ0RmlsZQogICAgICAgIHN0YW1wID0gYnl0ZXMuY291bnQKICAgIH0KICAgIGVtaXQoWwogICAgICAgICJvayI6IHRydWUsCiAgICAgICAgImJ1bmRsZSI6IGJ1bmRsZSwKICAgICAgICAibmFtZSI6IG5hbWUsCiAgICAgICAgInRpdGxlIjogdGl0bGUsCiAgICAgICAgImFydGlzdCI6IHRleHQoaW5mb1tzdHJpbmdLZXkoaGFuZGxlLCAia01STWVkaWFSZW1vdGVOb3dQbGF5aW5nSW5mb0FydGlzdCIpXSksCiAgICAgICAgInBsYXlpbmciOiBwbGF5aW5nLAogICAgICAgICJyYXRlIjogcmF0ZSwKICAgICAgICAicG9zaXRpb24iOiBwb3NpdGlvbiwKICAgICAgICAiZHVyYXRpb24iOiBkdXJhdGlvbiwKICAgICAgICAiYXJ0IjogYXJ0LAogICAgICAgICJzdGFtcCI6IHN0YW1wCiAgICBdKQp9Cgp3aGlsZSB0cnVlIHsKICAgIHNuYXBzaG90KCkKICAgIFRocmVhZC5zbGVlcChmb3JUaW1lSW50ZXJ2YWw6IDEpCn0K"
+        let encoded = "aW1wb3J0IERhcndpbgppbXBvcnQgRm91bmRhdGlvbgoKbGV0IGZyYW1ld29ya1BhdGggPSAiL1N5c3RlbS9MaWJyYXJ5L1ByaXZhdGVGcmFtZXdvcmtzL01lZGlhUmVtb3RlLmZyYW1ld29yay9NZWRpYVJlbW90ZSIKbGV0IGFydEZpbGUgPSAiL3RtcC9jb3Vjb3Utbm93LXBsYXlpbmcuanBnIgoKZnVuYyBzeW1ib2w8VD4oXyBoYW5kbGU6IFVuc2FmZU11dGFibGVSYXdQb2ludGVyLCBfIG5hbWU6IFN0cmluZykgLT4gVD8gewogICAgZ3VhcmQgbGV0IHJhdyA9IGRsc3ltKGhhbmRsZSwgbmFtZSkgZWxzZSB7IHJldHVybiBuaWwgfQogICAgcmV0dXJuIHVuc2FmZUJpdENhc3QocmF3LCB0bzogVC5zZWxmKQp9CgpmdW5jIHN0cmluZ0tleShfIGhhbmRsZTogVW5zYWZlTXV0YWJsZVJhd1BvaW50ZXIsIF8gbmFtZTogU3RyaW5nKSAtPiBTdHJpbmcgewogICAgZ3VhcmQgbGV0IHJhdyA9IGRsc3ltKGhhbmRsZSwgbmFtZSkgZWxzZSB7IHJldHVybiBuYW1lIH0KICAgIHJldHVybiByYXcubG9hZChhczogQ0ZTdHJpbmc/LnNlbGYpLm1hcCB7ICQwIGFzIFN0cmluZyB9ID8/IG5hbWUKfQoKZnVuYyBlbWl0KF8gb2JqZWN0OiBbU3RyaW5nOiBBbnldKSB7CiAgICBndWFyZCBsZXQgZGF0YSA9IHRyeT8gSlNPTlNlcmlhbGl6YXRpb24uZGF0YSh3aXRoSlNPTk9iamVjdDogb2JqZWN0KSwKICAgICAgICAgIGxldCBsaW5lID0gU3RyaW5nKGRhdGE6IGRhdGEsIGVuY29kaW5nOiAudXRmOCkgZWxzZSB7CiAgICAgICAgcHJpbnQoIntcIm9rXCI6ZmFsc2V9IikKICAgICAgICBmZmx1c2goc3Rkb3V0KQogICAgICAgIHJldHVybgogICAgfQogICAgcHJpbnQobGluZSkKICAgIGZmbHVzaChzdGRvdXQpCn0KCmd1YXJkIGxldCBoYW5kbGUgPSBkbG9wZW4oZnJhbWV3b3JrUGF0aCwgUlRMRF9OT1cpIGVsc2UgewogICAgd2hpbGUgdHJ1ZSB7CiAgICAgICAgZW1pdChbIm9rIjogZmFsc2VdKQogICAgICAgIFRocmVhZC5zbGVlcChmb3JUaW1lSW50ZXJ2YWw6IDEpCiAgICB9Cn0KCnR5cGVhbGlhcyBJbmZvRm4gPSBAY29udmVudGlvbihjKSAoRGlzcGF0Y2hRdWV1ZSwgQGVzY2FwaW5nIEBjb252ZW50aW9uKGJsb2NrKSAoQ0ZEaWN0aW9uYXJ5PykgLT4gVm9pZCkgLT4gVm9pZAp0eXBlYWxpYXMgQm9vbEZuID0gQGNvbnZlbnRpb24oYykgKERpc3BhdGNoUXVldWUsIEBlc2NhcGluZyBAY29udmVudGlvbihibG9jaykgKEJvb2wpIC0+IFZvaWQpIC0+IFZvaWQKdHlwZWFsaWFzIFBJREZuID0gQGNvbnZlbnRpb24oYykgKERpc3BhdGNoUXVldWUsIEBlc2NhcGluZyBAY29udmVudGlvbihibG9jaykgKEludDMyKSAtPiBWb2lkKSAtPiBWb2lkCnR5cGVhbGlhcyBDbGllbnRzRm4gPSBAY29udmVudGlvbihjKSAoRGlzcGF0Y2hRdWV1ZSwgQGVzY2FwaW5nIEBjb252ZW50aW9uKGJsb2NrKSAoQ0ZBcnJheT8pIC0+IFZvaWQpIC0+IFZvaWQKdHlwZWFsaWFzIFRleHRGbiA9IEBjb252ZW50aW9uKGMpIChBbnlPYmplY3QpIC0+IENGU3RyaW5nPwp0eXBlYWxpYXMgUGlkT2ZGbiA9IEBjb252ZW50aW9uKGMpIChBbnlPYmplY3QpIC0+IEludDMyCnR5cGVhbGlhcyBTZW5kRm4gPSBAY29udmVudGlvbihjKSAoVUludDMyLCBDRkRpY3Rpb25hcnk/KSAtPiBCb29sCnR5cGVhbGlhcyBTZWVrRm4gPSBAY29udmVudGlvbihjKSAoRG91YmxlKSAtPiBWb2lkCgpsZXQgZ2V0SW5mbzogSW5mb0ZuPyA9IHN5bWJvbChoYW5kbGUsICJNUk1lZGlhUmVtb3RlR2V0Tm93UGxheWluZ0luZm8iKQpsZXQgaXNQbGF5aW5nRm46IEJvb2xGbj8gPSBzeW1ib2woaGFuZGxlLCAiTVJNZWRpYVJlbW90ZUdldE5vd1BsYXlpbmdBcHBsaWNhdGlvbklzUGxheWluZyIpCmxldCBnZXRQSUQ6IFBJREZuPyA9IHN5bWJvbChoYW5kbGUsICJNUk1lZGlhUmVtb3RlR2V0Tm93UGxheWluZ0FwcGxpY2F0aW9uUElEIikKbGV0IGdldENsaWVudHM6IENsaWVudHNGbj8gPSBzeW1ib2woaGFuZGxlLCAiTVJNZWRpYVJlbW90ZUdldE5vd1BsYXlpbmdDbGllbnRzIikKbGV0IGJ1bmRsZU9mOiBUZXh0Rm4/ID0gc3ltYm9sKGhhbmRsZSwgIk1STm93UGxheWluZ0NsaWVudEdldEJ1bmRsZUlkZW50aWZpZXIiKQpsZXQgbmFtZU9mOiBUZXh0Rm4/ID0gc3ltYm9sKGhhbmRsZSwgIk1STm93UGxheWluZ0NsaWVudEdldERpc3BsYXlOYW1lIikKbGV0IHBpZE9mOiBQaWRPZkZuPyA9IHN5bWJvbChoYW5kbGUsICJNUk5vd1BsYXlpbmdDbGllbnRHZXRQcm9jZXNzSWRlbnRpZmllciIpCmxldCBzZW5kQ29tbWFuZDogU2VuZEZuPyA9IHN5bWJvbChoYW5kbGUsICJNUk1lZGlhUmVtb3RlU2VuZENvbW1hbmQiKQpsZXQgc2Vla1RvOiBTZWVrRm4/ID0gc3ltYm9sKGhhbmRsZSwgIk1STWVkaWFSZW1vdGVTZXRFbGFwc2VkVGltZSIpCmxldCBxdWV1ZSA9IERpc3BhdGNoUXVldWUobGFiZWw6ICJjb3Vjb3Uubm93cGxheWluZyIpCgpmdW5jIGhhbmRsZUNvbW1hbmQoXyBsaW5lOiBTdHJpbmcpIHsKICAgIGxldCBwYXJ0cyA9IGxpbmUuc3BsaXQoc2VwYXJhdG9yOiAiICIpCiAgICBsZXQgdmVyYiA9IHBhcnRzLmZpcnN0Lm1hcChTdHJpbmcuaW5pdCkgPz8gIiIKICAgIHN3aXRjaCB2ZXJiIHsKICAgIGNhc2UgInRvZ2dsZSI6CiAgICAgICAgXyA9IHNlbmRDb21tYW5kPygyLCBuaWwpCiAgICBjYXNlICJuZXh0IjoKICAgICAgICBfID0gc2VuZENvbW1hbmQ/KDQsIG5pbCkKICAgIGNhc2UgInByZXYiOgogICAgICAgIF8gPSBzZW5kQ29tbWFuZD8oNSwgbmlsKQogICAgY2FzZSAic2VlayI6CiAgICAgICAgaWYgcGFydHMuY291bnQgPiAxLCBsZXQgc2Vjb25kcyA9IERvdWJsZShwYXJ0c1sxXSkgewogICAgICAgICAgICBzZWVrVG8/KG1heCgwLCBzZWNvbmRzKSkKICAgICAgICB9CiAgICBkZWZhdWx0OgogICAgICAgIGJyZWFrCiAgICB9Cn0KCkRpc3BhdGNoUXVldWUuZ2xvYmFsKHFvczogLnV0aWxpdHkpLmFzeW5jIHsKICAgIHdoaWxlIGxldCBsaW5lID0gcmVhZExpbmUoc3RyaXBwaW5nTmV3bGluZTogdHJ1ZSkgewogICAgICAgIGhhbmRsZUNvbW1hbmQobGluZSkKICAgIH0KfQoKZnVuYyB0ZXh0KF8gdmFsdWU6IEFueT8pIC0+IFN0cmluZyB7CiAgICBndWFyZCBsZXQgcmF3ID0gdmFsdWUgYXM/IFN0cmluZyBlbHNlIHsgcmV0dXJuICIiIH0KICAgIHJldHVybiByYXcudHJpbW1pbmdDaGFyYWN0ZXJzKGluOiAud2hpdGVzcGFjZXNBbmROZXdsaW5lcykKfQoKZnVuYyBudW1iZXIoXyB2YWx1ZTogQW55PykgLT4gRG91YmxlIHsKICAgIGxldCBudW1iZXI6IERvdWJsZQogICAgaWYgbGV0IHZhbHVlID0gdmFsdWUgYXM/IE5TTnVtYmVyIHsKICAgICAgICBudW1iZXIgPSB2YWx1ZS5kb3VibGVWYWx1ZQogICAgfSBlbHNlIGlmIGxldCB2YWx1ZSA9IHZhbHVlIGFzPyBEb3VibGUgewogICAgICAgIG51bWJlciA9IHZhbHVlCiAgICB9IGVsc2UgewogICAgICAgIG51bWJlciA9IDAKICAgIH0KICAgIGlmIG51bWJlci5pc05hTiB8fCBudW1iZXIgPCAwIHsgcmV0dXJuIDAgfQogICAgcmV0dXJuIG51bWJlcgp9CgpmdW5jIHNuYXBzaG90KCkgewogICAgbGV0IHdhaXQgPSBEaXNwYXRjaFNlbWFwaG9yZSh2YWx1ZTogMCkKICAgIHZhciBpbmZvOiBOU0RpY3Rpb25hcnk/CiAgICBnZXRJbmZvPyhxdWV1ZSkgeyBkaWN0IGluCiAgICAgICAgaW5mbyA9IGRpY3QubWFwIHsgJDAgYXMgTlNEaWN0aW9uYXJ5IH0KICAgICAgICB3YWl0LnNpZ25hbCgpCiAgICB9CiAgICBndWFyZCBnZXRJbmZvICE9IG5pbCwgd2FpdC53YWl0KHRpbWVvdXQ6IC5ub3coKSArIDAuOCkgPT0gLnN1Y2Nlc3MsIGxldCBpbmZvIGVsc2UgewogICAgICAgIGVtaXQoWyJvayI6IGZhbHNlXSkKICAgICAgICByZXR1cm4KICAgIH0KICAgIGxldCB0aXRsZSA9IHRleHQoaW5mb1tzdHJpbmdLZXkoaGFuZGxlLCAia01STWVkaWFSZW1vdGVOb3dQbGF5aW5nSW5mb1RpdGxlIildKQogICAgZ3VhcmQgIXRpdGxlLmlzRW1wdHkgZWxzZSB7CiAgICAgICAgZW1pdChbIm9rIjogZmFsc2VdKQogICAgICAgIHJldHVybgogICAgfQogICAgdmFyIHBsYXlpbmcgPSBmYWxzZQogICAgaXNQbGF5aW5nRm4/KHF1ZXVlKSB7IHZhbHVlIGluCiAgICAgICAgcGxheWluZyA9IHZhbHVlCiAgICAgICAgd2FpdC5zaWduYWwoKQogICAgfQogICAgaWYgaXNQbGF5aW5nRm4gIT0gbmlsIHsgXyA9IHdhaXQud2FpdCh0aW1lb3V0OiAubm93KCkgKyAwLjQpIH0KICAgIHZhciBwaWQ6IEludDMyID0gMAogICAgZ2V0UElEPyhxdWV1ZSkgeyB2YWx1ZSBpbgogICAgICAgIHBpZCA9IHZhbHVlCiAgICAgICAgd2FpdC5zaWduYWwoKQogICAgfQogICAgaWYgZ2V0UElEICE9IG5pbCB7IF8gPSB3YWl0LndhaXQodGltZW91dDogLm5vdygpICsgMC40KSB9CiAgICB2YXIgYnVuZGxlID0gIiIKICAgIHZhciBuYW1lID0gIiIKICAgIGdldENsaWVudHM/KHF1ZXVlKSB7IGFycmF5IGluCiAgICAgICAgbGV0IGl0ZW1zID0gKGFycmF5IGFzPyBbQW55XSkgPz8gW10KICAgICAgICB2YXIgZmFsbGJhY2tCdW5kbGUgPSAiIgogICAgICAgIHZhciBmYWxsYmFja05hbWUgPSAiIgogICAgICAgIGZvciBpdGVtIGluIGl0ZW1zIHsKICAgICAgICAgICAgbGV0IG9iaiA9IGl0ZW0gYXMgQW55T2JqZWN0CiAgICAgICAgICAgIGxldCBpdGVtQnVuZGxlID0gYnVuZGxlT2Y/KG9iaikubWFwIHsgJDAgYXMgU3RyaW5nIH0gPz8gIiIKICAgICAgICAgICAgbGV0IGl0ZW1OYW1lID0gbmFtZU9mPyhvYmopLm1hcCB7ICQwIGFzIFN0cmluZyB9ID8/ICIiCiAgICAgICAgICAgIGxldCBpdGVtUElEID0gcGlkT2Y/KG9iaikgPz8gMAogICAgICAgICAgICBpZiBmYWxsYmFja0J1bmRsZS5pc0VtcHR5IHsKICAgICAgICAgICAgICAgIGZhbGxiYWNrQnVuZGxlID0gaXRlbUJ1bmRsZQogICAgICAgICAgICAgICAgZmFsbGJhY2tOYW1lID0gaXRlbU5hbWUKICAgICAgICAgICAgfQogICAgICAgICAgICBpZiBwaWQgIT0gMCAmJiBpdGVtUElEID09IHBpZCB7CiAgICAgICAgICAgICAgICBidW5kbGUgPSBpdGVtQnVuZGxlCiAgICAgICAgICAgICAgICBuYW1lID0gaXRlbU5hbWUKICAgICAgICAgICAgICAgIGJyZWFrCiAgICAgICAgICAgIH0KICAgICAgICB9CiAgICAgICAgaWYgYnVuZGxlLmlzRW1wdHkgewogICAgICAgICAgICBidW5kbGUgPSBmYWxsYmFja0J1bmRsZQogICAgICAgICAgICBuYW1lID0gZmFsbGJhY2tOYW1lCiAgICAgICAgfQogICAgICAgIHdhaXQuc2lnbmFsKCkKICAgIH0KICAgIGlmIGdldENsaWVudHMgIT0gbmlsIHsgXyA9IHdhaXQud2FpdCh0aW1lb3V0OiAubm93KCkgKyAwLjQpIH0KICAgIHZhciBwb3NpdGlvbiA9IG51bWJlcihpbmZvW3N0cmluZ0tleShoYW5kbGUsICJrTVJNZWRpYVJlbW90ZU5vd1BsYXlpbmdJbmZvRWxhcHNlZFRpbWUiKV0pCiAgICB2YXIgZHVyYXRpb24gPSBudW1iZXIoaW5mb1tzdHJpbmdLZXkoaGFuZGxlLCAia01STWVkaWFSZW1vdGVOb3dQbGF5aW5nSW5mb0R1cmF0aW9uIildKQogICAgaWYgZHVyYXRpb24gPiAxMDBfMDAwIHsgZHVyYXRpb24gLz0gMTAwMCB9CiAgICBpZiBwb3NpdGlvbiA+IDEwMF8wMDAgeyBwb3NpdGlvbiAvPSAxMDAwIH0KICAgIGxldCByYXRlID0gbnVtYmVyKGluZm9bc3RyaW5nS2V5KGhhbmRsZSwgImtNUk1lZGlhUmVtb3RlTm93UGxheWluZ0luZm9QbGF5YmFja1JhdGUiKV0pCiAgICB2YXIgYXJ0ID0gIiIKICAgIHZhciBzdGFtcCA9IDAKICAgIGxldCBhcnR3b3JrVmFsdWUgPSBpbmZvW3N0cmluZ0tleShoYW5kbGUsICJrTVJNZWRpYVJlbW90ZU5vd1BsYXlpbmdJbmZvQXJ0d29ya0RhdGEiKV0KICAgIGxldCBieXRlczogRGF0YT8KICAgIGlmIGxldCBkYXRhID0gYXJ0d29ya1ZhbHVlIGFzPyBEYXRhIHsKICAgICAgICBieXRlcyA9IGRhdGEKICAgIH0gZWxzZSBpZiBsZXQgZGF0YSA9IGFydHdvcmtWYWx1ZSBhcz8gTlNEYXRhIHsKICAgICAgICBieXRlcyA9IGRhdGEgYXMgRGF0YQogICAgfSBlbHNlIHsKICAgICAgICBieXRlcyA9IG5pbAogICAgfQogICAgaWYgbGV0IGJ5dGVzLCAhYnl0ZXMuaXNFbXB0eSB7CiAgICAgICAgdHJ5PyBieXRlcy53cml0ZSh0bzogVVJMKGZpbGVVUkxXaXRoUGF0aDogYXJ0RmlsZSksIG9wdGlvbnM6IC5hdG9taWMpCiAgICAgICAgYXJ0ID0gYXJ0RmlsZQogICAgICAgIHN0YW1wID0gYnl0ZXMuY291bnQKICAgIH0KICAgIGVtaXQoWwogICAgICAgICJvayI6IHRydWUsCiAgICAgICAgImJ1bmRsZSI6IGJ1bmRsZSwKICAgICAgICAibmFtZSI6IG5hbWUsCiAgICAgICAgInRpdGxlIjogdGl0bGUsCiAgICAgICAgImFydGlzdCI6IHRleHQoaW5mb1tzdHJpbmdLZXkoaGFuZGxlLCAia01STWVkaWFSZW1vdGVOb3dQbGF5aW5nSW5mb0FydGlzdCIpXSksCiAgICAgICAgInBsYXlpbmciOiBwbGF5aW5nLAogICAgICAgICJyYXRlIjogcmF0ZSwKICAgICAgICAicG9zaXRpb24iOiBwb3NpdGlvbiwKICAgICAgICAiZHVyYXRpb24iOiBkdXJhdGlvbiwKICAgICAgICAiYXJ0IjogYXJ0LAogICAgICAgICJzdGFtcCI6IHN0YW1wCiAgICBdKQp9Cgp3aGlsZSB0cnVlIHsKICAgIHNuYXBzaG90KCkKICAgIFRocmVhZC5zbGVlcChmb3JUaW1lSW50ZXJ2YWw6IDEpCn0K"
         guard let data = Data(base64Encoded: encoded),
               let text = String(data: data, encoding: .utf8),
               !text.isEmpty else { return "" }
@@ -1807,7 +2253,7 @@ enum SystemNowPlaying {
         guard let data, !data.isEmpty else { return nil }
         let path = "/tmp/coucou-now-playing.jpg"
         do {
-            try data.write(to: URL(fileURLWithPath: path))
+            try data.write(to: URL(fileURLWithPath: path), options: .atomic)
         } catch {
             return nil
         }
@@ -2134,6 +2580,18 @@ enum LogicStemSplitter {
     """
 }
 
+final class ReleaseRedirectGuard: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest
+    ) async -> URLRequest? {
+        guard let url = request.url, LiveActivityBehavior.allowsReleaseRedirect(url) else { return nil }
+        return request
+    }
+}
+
 enum ReleaseProbe {
     nonisolated static func latest() async -> LiveActivityBehavior.PublishedRelease? {
         guard let url = URL(string: LiveActivityBehavior.releaseAPI) else { return nil }
@@ -2143,6 +2601,31 @@ enum ReleaseProbe {
         guard let (data, response) = try? await URLSession.shared.data(for: request),
               (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
         return LiveActivityBehavior.publishedRelease(json: data)
+    }
+
+    /// Saves Coucou.zip. A failed download leaves any earlier saved zip in place.
+    nonisolated static func downloadZip(from urlString: String, to destination: URL) async -> Bool {
+        guard LiveActivityBehavior.allowedDownloadURL(urlString) != nil,
+              let remote = URL(string: urlString) else { return false }
+        let delegate = ReleaseRedirectGuard()
+        let session = URLSession(configuration: .ephemeral, delegate: delegate, delegateQueue: nil)
+        defer { session.finishTasksAndInvalidate() }
+        let partial = destination.appendingPathExtension("partial")
+        do {
+            let (temp, response) = try await session.download(from: remote)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return false }
+            guard LiveActivityBehavior.isZipFile(at: temp) else { return false }
+            let fm = FileManager.default
+            try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if fm.fileExists(atPath: partial.path) { try fm.removeItem(at: partial) }
+            try fm.moveItem(at: temp, to: partial)
+            if fm.fileExists(atPath: destination.path) { try fm.removeItem(at: destination) }
+            try fm.moveItem(at: partial, to: destination)
+            return fm.fileExists(atPath: destination.path)
+        } catch {
+            try? FileManager.default.removeItem(at: partial)
+            return false
+        }
     }
 }
 
@@ -2268,8 +2751,9 @@ enum BatteryProbe {
         return nil
     }
 
-    /// Watts entering the cells, plus the charger contract for diagnostics.
-    /// The contract is never the number on the card.
+    /// Watts coming in from the connection, plus the charger contract for diagnostics.
+    /// The contract is never the number on the card. A 15W listing is the port's
+    /// rating. The card shows the live input, and the pack watts only if that is missing.
     private static func powerSample(charging: Bool) -> (pack: Double?, supply: Double?) {
         let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSmartBattery"))
         guard service != 0 else { return (nil, nil) }
@@ -2285,10 +2769,33 @@ enum BatteryProbe {
             millivolts: registryInt(service, "Voltage"),
             charging: chargingNow
         )
-        return (pack, supply)
+        let input = connected ? portInputMilliwatts(service) : nil
+        let shown = NookLayout.shownChargeWatts(inputMilliwatts: input, packWatts: pack)
+        return (shown, supply)
     }
 
-    /// BatteryPower from PowerTelemetryData, in milliwatts. Negative while the pack is charging.
+    /// Live milliwatts on the cable. `IPDInputPower` is the port measurement.
+    /// `SystemPowerIn` is the same reading when the distribution block is missing.
+    private static func portInputMilliwatts(_ service: io_registry_entry_t) -> Int? {
+        if let distribution = registryDictionary(service, "PowerDistribution"),
+           let power = number(distribution["IPDInputPower"]), power > 0 {
+            return power
+        }
+        if let telemetry = registryDictionary(service, "PowerTelemetryData"),
+           let power = number(telemetry["SystemPowerIn"]), power > 0 {
+            return power
+        }
+        return nil
+    }
+
+    private static func registryDictionary(_ service: io_registry_entry_t, _ key: String) -> NSDictionary? {
+        guard let raw = IORegistryEntryCreateCFProperty(service, key as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue() else {
+            return nil
+        }
+        return raw as? NSDictionary
+    }
+
+    /// BatteryPower from PowerTelemetryData, in milliwatts. Negative while the pack is supplying the Mac.
     private static func batteryPowerMilliwatts(_ service: io_registry_entry_t) -> Int? {
         guard let raw = IORegistryEntryCreateCFProperty(service, "PowerTelemetryData" as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue(),
               let dict = raw as? NSDictionary else { return nil }

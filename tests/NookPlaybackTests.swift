@@ -211,38 +211,64 @@ enum NookPlaybackTests {
         precondition(abs(right - 360) < 0.5)
     }
 
-    /// A playing session grows a right wing for the play button only.
-    /// The matching left wing keeps the housing centered. The app icon,
-    /// the waveform, and the song name stay off that closed notch.
+    /// A playing video grows a right wing for the waveform only.
+    /// The matching left wing keeps the housing centered. The play button,
+    /// the app icon, and the name stay off that closed notch.
     static func testClosedNotchShowsArtworkAndWave() {
         precondition(NookPlayback.mediaWingWidth(showing: false) == 0)
         let wing = NookPlayback.mediaWingWidth(showing: true)
-        precondition(wing == 36, "the play button does not need the chrome icon and the wave")
+        precondition(wing == 36, "the waveform does not need the chrome icon")
         let notch: CGFloat = 251
         let width = notch + wing * 2
         let center = NookPlayback.mediaShelfCenterX(islandWidth: width, wing: wing)
-        precondition(center > width / 2, "the play button stayed off the right wing")
+        precondition(center > width / 2, "the waveform stayed off the right wing")
         precondition(abs(center - (width - wing / 2)) < 0.5)
         let housing = NookPlayback.housingEdges(islandWidth: width, notchWidth: notch)
         let title = NookPlayback.mediaTitlePlacement(islandWidth: width, notchWidth: notch)
         precondition(title.maxWidth == 0, "the closed notch still shows the track name")
         let shelfLeft = center - NookPlayback.shelfContentWidth / 2
-        precondition(NookPlayback.shelfContentWidth == 18, "the play button is still as wide as the old shelf")
-        precondition(shelfLeft + 0.5 >= housing.trailing, "the play button crosses the camera")
+        precondition(NookPlayback.shelfContentWidth == 28, "the waveform is not the width of the seven bars")
+        precondition(shelfLeft + 0.5 >= housing.trailing, "the waveform crosses the camera")
         let blocked = NookPlayback.mediaTitlePlacement(islandWidth: notch, notchWidth: notch)
         precondition(blocked.maxWidth == 0, "a title with no wing still uses the camera")
+        precondition(NookPlayback.showsWaveOnClosedNotch(
+            bundleID: "com.google.Chrome", displayName: "Google Chrome",
+            title: "A clip", playing: true, outputRunning: false
+        ), "a playing Chrome video hid the waveform")
+        precondition(NookPlayback.showsWaveOnClosedNotch(
+            bundleID: "com.apple.Safari", displayName: "Safari",
+            title: "A clip", playing: false, outputRunning: true
+        ), "a Safari tab that is still sending picture hid the waveform")
+        precondition(!NookPlayback.showsWaveOnClosedNotch(
+            bundleID: "com.google.Chrome", displayName: "Google Chrome",
+            title: "A clip", playing: false, outputRunning: false
+        ), "a paused video still drew the waveform")
+        precondition(!NookPlayback.showsWaveOnClosedNotch(
+            bundleID: "com.apple.Music", displayName: "Music",
+            title: "Song", playing: true, outputRunning: true
+        ), "music drew the waveform")
+        precondition(!NookPlayback.showsWaveOnClosedNotch(
+            bundleID: "com.spotify.client", displayName: "Spotify",
+            title: "Song", playing: true, outputRunning: false
+        ), "spotify drew the waveform")
         let root = try! String(contentsOfFile: "NotchBuddy/Sources/App/IslandRootView.swift", encoding: .utf8)
+        precondition(root.contains("showsWaveOnClosedNotch"), "the closed notch still keys the shelf off every session")
         precondition(root.contains("mediaTitlePlacement"), "the title still sits on the camera")
         precondition(root.contains("edge.id == \"media\""), "the song line still uses the center")
         precondition(!NookPlayback.waveIsMoving(reportedPlaying: false, outputRunning: false))
         precondition(NookPlayback.waveIsMoving(reportedPlaying: true, outputRunning: false))
         precondition(NookPlayback.waveIsMoving(reportedPlaying: false, outputRunning: true), "a loud Chrome tab left the waveform still")
-        let moving = NookPlayback.barHeights(phase: 0.4, moving: true)
-        precondition(moving.count == 7)
-        precondition(moving.allSatisfy { $0 >= 0.28 && $0 <= 1 })
-        precondition(Set(moving.map { Int($0 * 100) }).count > 1, "the waveform was a flat line")
-        let resting = NookPlayback.barHeights(phase: 0.4, moving: false)
-        precondition(resting == Array(repeating: 0.22, count: 7))
+        let quiet = NookPlayback.playedBars(Array(repeating: 0, count: 7))
+        precondition(quiet == Array(repeating: 0.16, count: 7), "silence still draws a bouncing wave")
+        let loud = NookPlayback.playedBars([1, 0, 0.5, 0, 0, 0, 0])
+        precondition(loud.count == 7)
+        precondition(abs(loud[0] - 1) < 0.001)
+        precondition(abs(loud[1] - 0.16) < 0.001)
+        precondition(abs(loud[2] - 0.58) < 0.001, "a louder band did not grow")
+        let beside = NookPlayback.closedThumbCenterX(whiteX: 68, botDiameter: 20)
+        precondition(beside != nil)
+        precondition(beside! + NookPlayback.closedThumbWidth / 2 < 68 - 10, "the picture sits on the white blob")
+        precondition(NookPlayback.closedThumbCenterX(whiteX: 20, botDiameter: 20) == nil)
         let lifted = NookPlayback.waveTint(red: 0, green: 0, blue: 0)
         precondition(lifted.0 >= 0.7 && lifted.1 >= 0.7 && lifted.2 >= 0.7, "a black cover disappeared on the notch")
         let cover = NookPlayback.waveTint(red: 0.40, green: 0.54, blue: 0.50)
@@ -253,12 +279,16 @@ enum NookPlaybackTests {
             preconditionFailure("the closed notch player is missing")
         }
         let body = String(shelf[start.lowerBound..<end.lowerBound])
-        precondition(body.contains("mediaShelfCenterX"), "the play button is not on the right wing")
-        precondition(body.contains("togglePlayback"), "the closed notch has no play button")
-        precondition(!body.contains("Audio waveform"), "the wave is still beside the play button")
-        precondition(!body.contains("barHeights"), "the wave is still drawn on the closed notch")
-        precondition(!body.contains("func artwork"), "the chrome thumbnail is still beside the play button")
+        precondition(body.contains("mediaShelfCenterX"), "the waveform is not on the right wing")
+        precondition(body.contains("playedBars"), "the waveform is not drawn on the closed notch")
+        precondition(body.contains("PlaybackWave"), "the bars are not driven by the sound")
+        precondition(!body.contains("barHeights"), "the waveform is still a clock")
+        precondition(!body.contains("togglePlayback"), "the play button is still on the closed notch")
+        precondition(!body.contains("play.fill"), "the play button is still on the closed notch")
+        precondition(!body.contains("func artwork"), "the chrome thumbnail is still beside the waveform")
         precondition(!body.contains("mediaTitle"), "the closed notch shows the track name")
+        precondition(root.contains("ClosedPlayingThumb"), "the video picture is not beside the white blob")
+        precondition(root.contains("closedThumbCenterX"), "the video picture is not placed from the white blob")
     }
 
     /// A now-playing line from the system reader reaches the closed notch.

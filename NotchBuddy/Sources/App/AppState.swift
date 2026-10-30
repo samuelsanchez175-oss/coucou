@@ -156,7 +156,7 @@ final class AppState: ObservableObject {
         didSet { UserDefaults.standard.set(lmstudioServerURL, forKey: "lmstudioServerURL") }
     }
 
-    // The always-on workspace pill (default: VS Code). Persisted.
+    // The always-on workspace pill next to the white blob. Grok Bot is the default. Persisted.
     @Published var mainPillId: String = PillCatalog.defaultMainPillId {
         didSet { UserDefaults.standard.set(mainPillId, forKey: "mainPill") }
     }

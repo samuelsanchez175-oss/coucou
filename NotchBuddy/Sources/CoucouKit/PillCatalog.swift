@@ -69,6 +69,8 @@ enum PillCatalog {
     // All declared pills in display order.
     static let all: [PillDefinition] = [
         // ── Where you code ───────────────────────────────────────────────────
+        .init(id: "agent_grokbot",       name: "Grok Bot",    color: "#C8CCD6",
+              category: .workspace, subtitle: "Integration",  source: .agent),
         .init(id: "integration_claude",  name: "VS Code",     color: "#F5F6F8",
               category: .workspace, subtitle: "Integration",  source: .claudeCode),
         .init(id: "agent_cursor",        name: "Cursor",      color: "#C0C4CC",
@@ -141,8 +143,13 @@ enum PillCatalog {
         #endif
     }
 
+    /// The white blob can show Grok Bot or VS Code. Grok Bot is first and is the default.
+    static let grokBotPillId = "agent_grokbot"
+    static let vsCodePillId = "integration_claude"
+    static let whiteBlobPillIds = [grokBotPillId, vsCodePillId]
+
     /// Default ID for the always-on main workspace pill.
-    static let defaultMainPillId = "integration_claude"
+    static let defaultMainPillId = grokBotPillId
 
     /// Looks up a definition by task ID (nil if not in catalog).
     static func definition(for id: String) -> PillDefinition? {

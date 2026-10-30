@@ -6,6 +6,7 @@ import Foundation
 enum PillFixture {
     static let available: [PillDefinition] = [
         // ── Where you code ────────────────────────────────────────────────────
+        .init(id: "agent_grokbot",        name: "Grok Bot",      color: "#C8CCD6", category: .workspace, subtitle: "Integration", source: .agent),
         .init(id: "integration_claude",   name: "VS Code",       color: "#F5F6F8", category: .workspace, subtitle: "Integration", source: .claudeCode),
         .init(id: "agent_cursor",         name: "Cursor",        color: "#C0C4CC", category: .workspace, subtitle: "Integration", source: .agent),
         .init(id: "agent_antigravity",    name: "Antigravity",   color: "#E879F9", category: .workspace, subtitle: "Integration", source: .agent),

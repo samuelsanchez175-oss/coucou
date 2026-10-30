@@ -324,10 +324,10 @@ final class IslandWindowController: NSWindowController {
     /// Always re-applied, even on the same screen: its menu bar or resolution may have changed.
     private func relocate(to screen: NSScreen) {
         guard let panel = window as? IslandPanel else { return }
-        let geometry = Self.screenGeometry(for: screen)
-        notchW = geometry.width
-        notchH = geometry.height
-        hasNotch = geometry.hasNotch
+        let fitted = Self.fittedNotch(on: screen)
+        notchW = fitted.width
+        notchH = fitted.height
+        hasNotch = fitted.hasNotch
         panel.notchWidth  = notchW
         panel.notchHeight = notchH
         AppState.shared.notchWidth  = notchW
@@ -440,8 +440,12 @@ final class IslandWindowController: NSWindowController {
             self?.fsm.greetComplete()
         }
 
-        // An approval, or an email prepared by voice, stays open until I click.
-        fsm.isHeldOpen = { AppState.shared.pendingApproval != nil || AppState.shared.voiceMailDraft != nil }
+        // An approval, a voice email, or the update choice stays open until I click.
+        fsm.isHeldOpen = {
+            AppState.shared.pendingApproval != nil
+                || AppState.shared.voiceMailDraft != nil
+                || NookBoard.shared.updatePrompt != nil
+        }
 
         // Voice: wake phrase detected → open listening island
         #if !APPSTORE
@@ -675,8 +679,11 @@ final class IslandWindowController: NSWindowController {
         if settingsPreview == .none && !typingLock && !inIsland && wasInIsland {
             let keepExpanded = prefs.preventCloseOnMouseLeave && fsm.state == .home
             let pageHeld = pageLockKeepsOpen && fsm.state == .home
+            let promptHeld = NookBoard.shared.updatePrompt != nil
             let extended = state.mode == .expanded && DrawerPull.isExtended(state.drawerExtension)
-            if fsm.state == .home && !keepExpanded && !pageHeld && !extended {
+            if promptHeld {
+                // The Update / Save for later prompt stays until a choice.
+            } else if fsm.state == .home && !keepExpanded && !pageHeld && !extended {
                 // Fold as soon as the pointer leaves the island. The 15s timer
                 // made the open notch feel stuck. A locked terminal page waits 20s.
                 fsm.collapse()
@@ -711,10 +718,11 @@ final class IslandWindowController: NSWindowController {
         if settingsPreview != .none {
             keepSettingsPreview()
         }
-        if settingsPreview == .none && pageLockExpired && !inIsland && fsm.state == .home && !prefs.preventCloseOnMouseLeave {
+        let updateChoice = NookBoard.shared.updatePrompt != nil
+        if settingsPreview == .none && pageLockExpired && !inIsland && fsm.state == .home && !prefs.preventCloseOnMouseLeave && !updateChoice {
             fsm.collapse()
             fsm.mouseLeft()
-        } else if settingsPreview == .none && pageLockWasOn && !desk.pageLocked && !inIsland && onTerminalPage && fsm.state == .home && !prefs.preventCloseOnMouseLeave {
+        } else if settingsPreview == .none && pageLockWasOn && !desk.pageLocked && !inIsland && onTerminalPage && fsm.state == .home && !prefs.preventCloseOnMouseLeave && !updateChoice {
             fsm.collapse()
             fsm.mouseLeft()
         }
@@ -1246,6 +1254,11 @@ final class IslandWindowController: NSWindowController {
         NotificationCenter.default.addObserver(forName: .islandCollapse, object: nil, queue: .main) { [weak self] _ in
             guard let self, self.settingsPreview == .none else { return }
             self.collapse()
+        }
+        NotificationCenter.default.addObserver(forName: .showUpdatePrompt, object: nil, queue: .main) { [weak self] _ in
+            guard let self, self.state.mode != .expanded else { return }
+            self.fsm.openedExternally()
+            self.expand(to: .overview)
         }
         NotificationCenter.default.addObserver(forName: .openNookPage, object: nil, queue: .main) { [weak self] _ in
             guard let self, self.settingsPreview == .none else { return }
@@ -2734,6 +2747,7 @@ extension Notification.Name {
     static let botMorphTo       = Notification.Name("notchBuddy.botMorphTo")
     static let islandAction     = Notification.Name("notchBuddy.islandAction")
     static let islandCollapse   = Notification.Name("notchBuddy.islandCollapse")
+    static let showUpdatePrompt = Notification.Name("notchBuddy.showUpdatePrompt")
     static let openNookPage     = Notification.Name("notchBuddy.openNookPage")
     static let settingsNotchPreview = Notification.Name("notchBuddy.settingsNotchPreview")
     static let voiceShowMailCard   = Notification.Name("notchBuddy.voiceShowMailCard")

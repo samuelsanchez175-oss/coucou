@@ -37,6 +37,34 @@ enum IslandDisplayChoiceTests {
 
         precondition(IslandDisplayResolver.index(for: .menuBar, in: []) == nil)
 
+        let connected = [
+            DisplaySettingScreen(uuid: "MBP", name: "Built-in Retina Display", hasNotch: true),
+            DisplaySettingScreen(uuid: "LEFT", name: "DELL", hasNotch: false),
+            DisplaySettingScreen(uuid: "RIGHT", name: "DELL", hasNotch: false),
+        ]
+        let rows = DisplaySettingList.options(screens: connected)
+        precondition(rows.map(\.id) == ["notch", "display:LEFT", "display:RIGHT"])
+        precondition(rows.map(\.title) == ["Main display", "DELL", "DELL 2"])
+        precondition(rows.first?.title == "Main display", "the current screen stays Main display")
+
+        let deskScreens = [
+            DisplaySettingScreen(uuid: "A", name: "Studio Display", hasNotch: false),
+            DisplaySettingScreen(uuid: "B", name: "Cinema", hasNotch: false),
+        ]
+        let deskRows = DisplaySettingList.options(screens: deskScreens)
+        precondition(deskRows.map(\.title) == ["Main display", "Cinema"])
+        precondition(deskRows.map(\.id) == ["notch", "display:B"])
+
+        let unnamed = [DisplaySettingScreen(uuid: "X", name: "  ", hasNotch: false)]
+        precondition(DisplaySettingList.options(screens: unnamed).map(\.title) == ["Main display"])
+
+        let general = (try? String(contentsOfFile: "NotchBuddy/Sources/App/CoucouSettingsShell.swift", encoding: .utf8)) ?? ""
+        precondition(general.contains("SettingsSection(\"Display\")"), "the general tab has a Display setting")
+        precondition(general.contains("Use Coucou on this display, not only the main display."))
+        precondition(general.contains("DisplayPicker"))
+        let list = (try? String(contentsOfFile: "NotchBuddy/Sources/App/IslandDisplayChoice.swift", encoding: .utf8)) ?? ""
+        precondition(list.contains("\"Main display\""))
+
         print("IslandDisplayChoice tests passed")
     }
 }

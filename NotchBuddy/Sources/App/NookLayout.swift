@@ -254,21 +254,22 @@ enum NookLayout {
     }
 
     /// Signed milliamps times millivolts, only while the pack is charging.
-    /// AppleSmartBattery uses a negative current when power is leaving the pack.
-    /// A wrapped InstantAmperage near 65535 is not a real current.
+    /// On this Mac a positive current is entering the pack. A negative current
+    /// is the pack supplying the Mac, so the charge rate is 0. A wrapped
+    /// InstantAmperage near 65535 is not a real current.
     static func chargingWatts(milliamps: Int, millivolts: Int, charging: Bool) -> Double? {
-        guard charging, millivolts > 0, milliamps != 0, abs(milliamps) <= 20_000 else { return nil }
-        let amps = milliamps < 0 ? -milliamps : milliamps
-        let watts = Double(amps) * Double(millivolts) / 1_000_000
+        guard charging, millivolts > 0, milliamps != 0 else { return nil }
+        guard milliamps > 0 else { return 0 }
+        guard milliamps <= 20_000 else { return nil }
+        let watts = Double(milliamps) * Double(millivolts) / 1_000_000
         guard watts.isFinite, watts > 0, watts <= 240 else { return nil }
         return watts
     }
 
-    /// Watts entering the battery. `BatteryPower` is milliwatts.
-    /// On this Mac it is positive while the pack is charging: 4318 mW matches
-    /// 338 mA at 12695 mV. A negative sample is the same inflow with the other sign,
-    /// so a charge uses the magnitude. Discharge is 0. A zero power sample falls
-    /// back to current times voltage. The adapter contract and system draw are not inputs.
+    /// Watts entering the cells. Positive current times voltage is that power.
+    /// A negative sample means the pack is discharging, even if the charger is
+    /// attached, so the charge rate is 0. The adapter rating and the system
+    /// load are not inputs.
     static func measuredChargeWatts(
         batteryPowerMilliwatts: Int?,
         milliamps: Int?,
@@ -276,17 +277,32 @@ enum NookLayout {
         charging: Bool
     ) -> Double? {
         guard charging else { return 0 }
-        if let batteryPowerMilliwatts, batteryPowerMilliwatts != 0 {
-            let watts = abs(Double(batteryPowerMilliwatts)) / 1000
-            guard watts.isFinite, watts > 0, watts <= 240 else { return nil }
-            return watts
-        }
+        if let milliamps, milliamps < 0, abs(milliamps) <= 20_000 { return 0 }
         if let milliamps, let millivolts,
            let watts = chargingWatts(milliamps: milliamps, millivolts: millivolts, charging: true) {
             return watts
         }
+        if let batteryPowerMilliwatts, batteryPowerMilliwatts < 0 { return 0 }
+        if let batteryPowerMilliwatts, batteryPowerMilliwatts > 0 {
+            let watts = Double(batteryPowerMilliwatts) / 1000
+            guard watts.isFinite, watts <= 240 else { return nil }
+            return watts
+        }
         if batteryPowerMilliwatts == 0 { return 0 }
         return nil
+    }
+
+    /// Watts to print while a charger is connected. This is the power the cable
+    /// is delivering, in milliwatts, which is what a meter on that connection shows.
+    /// The adapter's rated wattage is not an input. Pack watts are the fallback
+    /// when the port does not publish a live input.
+    static func shownChargeWatts(inputMilliwatts: Int?, packWatts: Double?) -> Double? {
+        if let inputMilliwatts, inputMilliwatts > 0 {
+            let watts = Double(inputMilliwatts) / 1000
+            if watts.isFinite, watts <= 240 { return watts }
+        }
+        guard let packWatts, packWatts.isFinite, packWatts >= 0, packWatts <= 240 else { return nil }
+        return packWatts
     }
 
     /// The charging speed as it reads on the notch, such as 0W, 2.4W, or 47W.
@@ -1419,16 +1435,16 @@ enum NookPlayback {
         return max(width / 2, islandWidth - rightInset - width / 2)
     }
 
-    /// Right wing for the 18pt play button, with air around it.
+    /// Right wing for the waveform, with air around it. The play button is not drawn here.
     static let mediaWing: CGFloat = 36
 
-    /// The closed notch grows this wing when a track or video is on it.
+    /// The closed notch grows this wing while a video waveform is on it.
     /// The same width is added on the left so the housing stays centered.
     static func mediaWingWidth(showing: Bool) -> CGFloat {
         showing ? mediaWing : 0
     }
 
-    /// Center of the play button, in the right wing.
+    /// Center of the waveform, in the right wing.
     static func mediaShelfCenterX(islandWidth: CGFloat, wing: CGFloat) -> CGFloat {
         let span = max(36, wing)
         return max(span / 2, islandWidth - span / 2)
@@ -1442,10 +1458,48 @@ enum NookPlayback {
         return (leading, leading + notch)
     }
 
-    /// The play button. The app icon and the waveform are not on the closed notch.
-    static let shelfContentWidth: CGFloat = 18
+    /// Seven bars. The closed notch draws this only while a video is playing.
+    static let shelfContentWidth: CGFloat = 28
 
-    /// The closed notch shows the play button only. The song or video name stays off.
+    /// Video picture beside the white blob. Wide, so a frame stays recognizable.
+    static let closedThumbWidth: CGFloat = 26
+    static let closedThumbHeight: CGFloat = 16
+
+    /// Center of that picture, on the outer side of the white blob.
+    /// Nil when the ear is too narrow to keep the picture off the blob.
+    static func closedThumbCenterX(whiteX: CGFloat, botDiameter: CGFloat) -> CGFloat? {
+        let gap: CGFloat = 5
+        let wanted = whiteX - botDiameter / 2 - gap - closedThumbWidth / 2
+        let center = max(closedThumbWidth / 2 + 2, wanted)
+        let thumbRight = center + closedThumbWidth / 2
+        let blobLeft = whiteX - botDiameter / 2
+        guard thumbRight <= blobLeft - 2 else { return nil }
+        return center
+    }
+
+    /// A browser video that is actually moving. Music, Spotify, and a paused
+    /// video leave the closed notch alone. The play button is not part of this.
+    static func showsWaveOnClosedNotch(
+        bundleID: String,
+        displayName: String,
+        title: String?,
+        playing: Bool,
+        outputRunning: Bool
+    ) -> Bool {
+        let trimmed = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else { return false }
+        guard waveIsMoving(reportedPlaying: playing, outputRunning: outputRunning) else { return false }
+        if case .browser = NookPictureInPicture.kind(
+            bundleID: bundleID,
+            displayName: displayName,
+            hasTitle: true
+        ) {
+            return true
+        }
+        return false
+    }
+
+    /// The closed notch does not show the song or video name.
     static func mediaTitlePlacement(islandWidth: CGFloat, notchWidth: CGFloat) -> (centerX: CGFloat, maxWidth: CGFloat) {
         _ = (islandWidth, notchWidth)
         return (0, 0)
@@ -1456,16 +1510,13 @@ enum NookPlayback {
         reportedPlaying || outputRunning
     }
 
-    /// Seven bars. A moving phase rises and falls. A resting phase stays short.
-    static func barHeights(phase: Double, moving: Bool, count: Int = 7) -> [CGFloat] {
+    /// Seven bars from the sound that is playing. 0 is quiet. 1 fills the bar.
+    static func playedBars(_ levels: [Float], count: Int = 7) -> [CGFloat] {
         let bars = max(1, count)
-        if !moving {
-            return Array(repeating: 0.22, count: bars)
-        }
         return (0..<bars).map { index in
-            let shift = Double(index) * 0.9
-            let wave = abs(sin(phase + shift))
-            return CGFloat(0.28 + 0.72 * wave)
+            let raw = index < levels.count ? CGFloat(levels[index]) : 0
+            let level = min(1, max(0, raw))
+            return 0.16 + 0.84 * level
         }
     }
 

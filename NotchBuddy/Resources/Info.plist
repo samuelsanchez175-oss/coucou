@@ -62,6 +62,8 @@
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Coucou uses the microphone when you dictate a message in the chat.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Coucou draws the notch waveform from the sound that is playing.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Coucou turns your voice into the text of a chat message.</string>
 	<key>NSSupportsAutomaticGraphicsSwitching</key>

@@ -143,6 +143,14 @@ private struct GeneralSettingsPane: View {
                         .onChange(of: launchAtLogin) { _, on in setLaunch(on) }
                 }
 
+                SettingsSection("Display") {
+                    DisplayPicker()
+                    Text("Use Coucou on this display, not only the main display. A display without a notch uses the handler.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
                 TerminalSettingsSection()
                     .padding(16)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -249,6 +257,39 @@ private struct GeneralSettingsPane: View {
 
     private func bind<T>(_ path: ReferenceWritableKeyPath<NookPreferences, T>) -> Binding<T> {
         Binding(get: { prefs[keyPath: path] }, set: { prefs[keyPath: path] = $0; prefs.persist() })
+    }
+}
+
+private struct DisplayPicker: View {
+    @ObservedObject private var state = AppState.shared
+
+    private var options: [DisplaySettingOption] {
+        DisplaySettingList.options(screens: NSScreen.screens.map { screen in
+            DisplaySettingScreen(
+                uuid: IslandWindowController.displayUUID(screen),
+                name: screen.localizedName,
+                hasNotch: screen.safeAreaInsets.top > 0
+            )
+        })
+    }
+
+    var body: some View {
+        let options = options
+        compactChoice("Display", selection: selection(options)) {
+            ForEach(options) { option in
+                Text(option.title).tag(option.id)
+            }
+        }
+    }
+
+    private func selection(_ options: [DisplaySettingOption]) -> Binding<String> {
+        Binding(
+            get: {
+                let id = state.islandDisplay.storageValue
+                return options.contains { $0.id == id } ? id : IslandDisplayChoice.notch.storageValue
+            },
+            set: { state.islandDisplay = IslandDisplayChoice(storageValue: $0) }
+        )
     }
 }
 

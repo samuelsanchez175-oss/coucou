@@ -223,7 +223,7 @@ struct BatterySpeedLine: View {
                 }
             }
             .fixedSize(horizontal: true, vertical: false)
-            .help(speed == nil ? "Battery percentage." : "Battery percentage and charging speed.")
+            .help(speed == nil ? "Battery percentage." : "Battery percentage and the watts coming in from the charger.")
             .accessibilityElement(children: .combine)
             .accessibilityLabel(speed.map { "\(shown) percent, \($0)" } ?? "\(shown) percent")
         }

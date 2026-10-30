@@ -40,7 +40,7 @@ enum TerminalBehavior {
         islandWidth - overviewPageInset * 2 - overviewLeftCard - overviewCardGap
     }
     /// Extra open-drawer height so the home player sits under the usage rows.
-    static let homePlayerDrop: CGFloat = 24
+    static let homePlayerDrop: CGFloat = 44
     static let overviewHeight: CGFloat = 8 + 34 + clusterHeight + 10 + homePlayerDrop
 
     /// Vertical center of the four faces, in the overview's content coordinates.
@@ -432,6 +432,7 @@ enum TerminalBehavior {
             "completed", "ready", "paused", "pending", "cancelled", "canceled",
             "successful", "failed", "required", "approval", "indexing", "compiling",
             "building", "installing", "updating", "progress", "progressing", "action",
+            "model",
         ]
         return weak.contains(name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
     }
@@ -1278,7 +1279,7 @@ enum TerminalBehavior {
             "quadrant", "quadrants", "brightness", "volume", "toggle", "green", "connection",
             "session", "sessions", "page", "pages", "shell", "tab", "tabs", "text", "name",
             "names", "status", "light", "lights", "color", "colors", "folder", "path", "code",
-            "data", "thing", "things", "charge", "watts", "parallel", "failed", "grok", "please",
+            "data", "thing", "things", "charge", "watts", "parallel", "failed", "grok", "model", "please",
             "just", "also", "still", "already",
         ]
         return generic.contains(word.lowercased())

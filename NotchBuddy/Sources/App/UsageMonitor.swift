@@ -17,26 +17,128 @@ final class UsageMonitor: ObservableObject {
 
     func start() {
         guard timer == nil else { return }
+        readings = UsageLimitStore.load()
+        if readings[.claude]?.hasReading != true, let history = UsageFetcher.claudeHistory() {
+            readings[.claude] = history
+            UsageLimitStore.save(readings)
+        }
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 120, repeats: true) { _ in
             Task { @MainActor in UsageMonitor.shared.refresh() }
         }
     }
 
-    /// Each service lands on its own. One slow reading must not hold the other three.
+    /// The button under the arrow. It saves a fresh reading, then asks Grok to force the rest.
+    func forceRefresh() {
+        inFlight.removeAll()
+        refresh()
+        submitGrokRefresh()
+    }
+
+    /// Each service lands on its own. A miss keeps the saved limits and their clock.
     func refresh() {
         for service in UsageBehavior.services where !inFlight.contains(service) {
             inFlight.insert(service)
+            let saved = readings[service]
             Task.detached {
                 let value = await UsageFetcher.reading(service)
                 await MainActor.run {
                     var next = UsageMonitor.shared.readings
-                    next[service] = value ?? UsageLevels()
+                    let kept = UsageBehavior.kept(fresh: value, saved: saved ?? next[service])
+                    if kept.hasReading { next[service] = kept }
                     UsageMonitor.shared.readings = next
+                    UsageLimitStore.save(next)
                     UsageMonitor.shared.inFlight.remove(service)
                 }
             }
         }
+    }
+
+    private func submitGrokRefresh() {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let grok = home.appendingPathComponent(".grok").appendingPathComponent("bin").appendingPathComponent("grok")
+        guard FileManager.default.fileExists(atPath: grok.path) else { return }
+        let limits = UsageLimitStore.fileURL()
+        let folder = limits?.deletingLastPathComponent().path ?? home.path
+        let command = UsageBehavior.usageRefreshCommand(
+            grok: grok.path,
+            folder: folder,
+            limitsPath: limits?.path ?? folder
+        )
+        let script = """
+        on run argv
+          set cmd to item 1 of argv
+          tell application "Terminal"
+            do script cmd
+          end tell
+          return "ok"
+        end run
+        """
+        _ = OSAScript.run(script, args: [command])
+    }
+}
+
+/// Last good limits for every coding agent. A failed read does not erase this file.
+enum UsageLimitStore {
+    static func load() -> [UsageService: UsageLevels] {
+        guard let url = fileURL(),
+              let data = try? Data(contentsOf: url),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
+        var readings: [UsageService: UsageLevels] = [:]
+        for service in UsageBehavior.services {
+            guard let box = root[service.rawValue] as? [String: Any],
+                  let rows = box["gates"] as? [[String: Any]] else { continue }
+            let gates = rows.compactMap(gate(from:))
+            let levels = UsageLevels(gates: gates)
+            if levels.hasReading { readings[service] = levels }
+        }
+        return readings
+    }
+
+    static func save(_ readings: [UsageService: UsageLevels]) {
+        guard let url = fileURL() else { return }
+        var root: [String: Any] = [:]
+        for (service, levels) in readings where levels.hasReading {
+            root[service.rawValue] = [
+                "gates": levels.gates.map { gate -> [String: Any] in
+                    var row: [String: Any] = [
+                        "model": gate.model,
+                        "window": gate.window,
+                    ]
+                    if let remaining = gate.remaining { row["remaining"] = remaining }
+                    if let replenishes = gate.replenishes { row["replenishes"] = replenishes.timeIntervalSince1970 }
+                    if let savedAt = gate.savedAt { row["savedAt"] = savedAt.timeIntervalSince1970 }
+                    return row
+                }
+            ]
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted]) else { return }
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: url, options: .atomic)
+    }
+
+    static func fileURL() -> URL? {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("Coucou", isDirectory: true)
+            .appendingPathComponent("usage-limits.json")
+    }
+
+    private static func gate(from row: [String: Any]) -> UsageGate? {
+        guard let model = row["model"] as? String, let window = row["window"] as? String else { return nil }
+        return UsageGate(
+            model: model,
+            window: window,
+            remaining: row["remaining"] as? Int,
+            replenishes: date(row["replenishes"]),
+            savedAt: date(row["savedAt"])
+        )
+    }
+
+    private static func date(_ value: Any?) -> Date? {
+        guard let number = value as? NSNumber else { return nil }
+        let raw = number.doubleValue
+        guard raw > 0 else { return nil }
+        return Date(timeIntervalSince1970: raw)
     }
 }
 
@@ -59,8 +161,19 @@ enum UsageFetcher {
         request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
         request.setValue("claude-code/2.1.32", forHTTPHeaderField: "User-Agent")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        guard let data = await body(for: request) else { return nil }
-        return UsageBehavior.parseClaude(data, model: savedModel("claudeModel", fallback: "claude-sonnet-4-6"))
+        if let data = await body(for: request) {
+            let levels = UsageBehavior.parseClaude(data, model: savedModel("claudeModel", fallback: "claude-sonnet-4-6"))
+            if levels.hasReading { return levels }
+        }
+        return claudeHistory()
+    }
+
+    /// The plan history Claude Desktop already saved. Used when the live read is refused.
+    static func claudeHistory() -> UsageLevels? {
+        let url = home.appendingPathComponent("Library/Application Support/Claude/plan-usage-history.json")
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        let levels = UsageBehavior.parseClaudeHistory(data)
+        return levels.hasReading ? levels : nil
     }
 
     static func grok() async -> UsageLevels? {

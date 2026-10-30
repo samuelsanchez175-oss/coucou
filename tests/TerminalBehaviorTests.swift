@@ -92,8 +92,8 @@ enum TerminalBehaviorTests {
         )
         precondition(TerminalBehavior.compactSide == 28)
         // Four faces, the Attach row, and the lock at the bottom of the tile.
-        precondition(TerminalBehavior.homePlayerDrop == 24, "the home player needs room under the usage rows")
-        precondition(TerminalBehavior.overviewHeight == 304, "overview is \(TerminalBehavior.overviewHeight)")
+        precondition(TerminalBehavior.homePlayerDrop == 44, "the home player needs room under the usage rows")
+        precondition(TerminalBehavior.overviewHeight == 324, "overview is \(TerminalBehavior.overviewHeight)")
         precondition(TerminalBehavior.faceColumn == 108)
         precondition(TerminalBehavior.faceGridWidth == 232, "both face columns share one centered group")
         let right = TerminalBehavior.overviewRightCard(islandWidth: IslandConst.expandedWidth)
@@ -291,6 +291,15 @@ enum TerminalBehaviorTests {
         precondition(names[2] == "samuel", names[2])
         precondition(names[3] == "PROBE-BR", names[3])
         precondition(names[4] == "Terminal 1", names[4])
+        let flag = TerminalBehavior.shortTitle(
+            "samuel — grok --model grok-4.7 — 83×24",
+            fallback: "Terminal 1"
+        )
+        precondition(flag != "model", "the model flag is not the blob name, got \(flag)")
+        precondition(
+            TerminalBehavior.lockNoun(current: "model", candidate: "Coucou", sessionEnded: false) == "Coucou",
+            "a model flag gives way to the topic"
+        )
         for shown in names {
             let words = shown.split(separator: " ")
             precondition((1...3).contains(words.count), shown)
@@ -917,6 +926,12 @@ enum TerminalBehaviorTests {
                 && resolved!.lowerBound < opens!.lowerBound
                 && opens!.lowerBound < raises!.lowerBound,
             "an empty blob opens that color; a married window is only raised"
+        )
+        let again = focus.range(of: "openOrFocus", range: raises!.upperBound..<focus.endIndex)
+        precondition(again != nil, "a missing window still opens that color")
+        precondition(
+            focus.range(of: "setWindow", range: raises!.upperBound..<again!.lowerBound) != nil,
+            "the missing window is dropped before a new one opens"
         )
 
         let controller = try! String(contentsOfFile: "NotchBuddy/Sources/App/IslandWindowController.swift", encoding: .utf8)

@@ -44,6 +44,48 @@ struct IslandDisplayCandidate {
     let containsMouse: Bool
 }
 
+/// One connected screen, in `NSScreen.screens` order.
+struct DisplaySettingScreen: Equatable {
+    var uuid: String?
+    var name: String
+    var hasNotch: Bool
+}
+
+/// One row in the General tab's Display picker.
+struct DisplaySettingOption: Equatable, Identifiable {
+    var id: String
+    var title: String
+}
+
+enum DisplaySettingList {
+    /// Main display is the notched screen Coucou uses now. Every other screen is its own row.
+    static func options(screens: [DisplaySettingScreen]) -> [DisplaySettingOption] {
+        let mainIndex = screens.firstIndex { $0.hasNotch } ?? (screens.isEmpty ? nil : 0)
+        var options = [DisplaySettingOption(id: IslandDisplayChoice.notch.storageValue, title: "Main display")]
+        var used: Set<String> = ["Main display"]
+        for (index, screen) in screens.enumerated() where index != mainIndex {
+            guard let uuid = screen.uuid, !uuid.isEmpty else { continue }
+            let base = screen.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            let title = freshTitle(base.isEmpty ? "Display" : base, used: &used)
+            options.append(DisplaySettingOption(
+                id: IslandDisplayChoice.display(uuid: uuid).storageValue,
+                title: title
+            ))
+        }
+        return options
+    }
+
+    private static func freshTitle(_ base: String, used: inout Set<String>) -> String {
+        if used.insert(base).inserted { return base }
+        var number = 2
+        while true {
+            let next = "\(base) \(number)"
+            if used.insert(next).inserted { return next }
+            number += 1
+        }
+    }
+}
+
 enum IslandDisplayResolver {
     /// Index of the screen that should host the island, or nil to use the default
     /// (notch screen, else main screen). A disconnected chosen screen falls back too.

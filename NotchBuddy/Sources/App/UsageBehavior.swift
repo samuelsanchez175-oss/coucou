@@ -33,6 +33,8 @@ struct UsageGate: Equatable {
     var remaining: Int?
     /// When this gate refills. Shown as a date and a time.
     var replenishes: Date? = nil
+    /// When this reading was saved. A later miss keeps this clock.
+    var savedAt: Date? = nil
 }
 
 /// The gates a service actually reported.
@@ -85,8 +87,14 @@ enum UsageBehavior {
     private static let fiveHourSpan: TimeInterval = 6 * 60 * 60
     private static let weekSpan: TimeInterval = 8 * 24 * 60 * 60
     private static let monthSpan: TimeInterval = 40 * 24 * 60 * 60
-    /// Clear space under the last model, reserved for the home player.
-    static let shelfClearance: CGFloat = 34
+    /// Home player row. The thumbnail and the title use this height.
+    static let playerRow: CGFloat = 28
+    /// Air between the last usage row and the player title.
+    static let playerGap: CGFloat = 12
+    /// Pad under the player, clear of the white pull pill.
+    static let playerBottom: CGFloat = 12
+    /// Hardcoded band at the bottom of the usage card. The rows stop above it.
+    static let shelfClearance: CGFloat = playerRow + playerGap + playerBottom
 
     static var stackWidth: CGFloat { TerminalBehavior.overviewLeftCard - stackLeading - 8 }
 
@@ -98,6 +106,41 @@ enum UsageBehavior {
 
     static var stackHeight: CGFloat {
         header + gap + row * CGFloat(services.count) + gap * CGFloat(max(0, services.count - 1))
+    }
+
+    /// Pull band under the page. Matches the drawer tab's 12pt clearance.
+    static let pageClearance: CGFloat = 12
+
+    /// Rows that fit the resting drawer, between the blob and the home player.
+    /// The live card may be taller. A longer list still must not lengthen the notch.
+    static var rowViewport: CGFloat {
+        let body = TerminalBehavior.drawerBodyHeight(
+            layoutHeight: TerminalBehavior.overviewHeight,
+            hasNotch: true
+        )
+        let shelfTop = body - pageClearance - shelfClearance
+        let room = shelfTop - stackTop - header - 8
+        return max(row, room)
+    }
+
+    /// Height of the model list. `offered` is the open room above the player.
+    /// Every row that fits is shown. The rest scroll inside that room.
+    static func rowListHeight(rowCount: Int, offered: CGFloat) -> CGFloat {
+        let rows = max(0, rowCount)
+        let full = row * CGFloat(rows) + gap * CGFloat(max(0, rows - 1))
+        return min(full, max(row, offered))
+    }
+
+    /// Resting-drawer list height. Extra rows stay inside the notch.
+    static func rowListHeight(rowCount: Int) -> CGFloat {
+        rowListHeight(rowCount: rowCount, offered: rowViewport)
+    }
+
+    /// Height the left card reports at rest. A longer list does not grow the notch.
+    static func laidOutStackHeight(rowCount: Int) -> CGFloat {
+        let rows = max(0, rowCount)
+        if rows == 0 { return header }
+        return header + gap + rowListHeight(rowCount: rows)
     }
 
     /// Column captions, left to right: five hours, week, then any later clock a model reported.
@@ -135,6 +178,72 @@ enum UsageBehavior {
     static func replenishLabel(remaining: Int?, at date: Date?, now: Date = Date(), timeZone: TimeZone = .current) -> String? {
         guard let reading = replenishReading(remaining: remaining, at: date, now: now, timeZone: timeZone) else { return nil }
         return "\(reading.day), \(reading.time)"
+    }
+
+    /// The clock beside a saved limit when that gate has no refill time.
+    static func savedReading(at date: Date?, timeZone: TimeZone = .current) -> (day: String, time: String)? {
+        guard let date else { return nil }
+        let day = DateFormatter()
+        day.locale = Locale(identifier: "en_US_POSIX")
+        day.timeZone = timeZone
+        day.dateFormat = "MMM d"
+        let clock = DateFormatter()
+        clock.locale = day.locale
+        clock.timeZone = timeZone
+        clock.dateFormat = "h:mm a"
+        return (day.string(from: date), clock.string(from: date))
+    }
+
+    /// A fresh reading replaces the saved one. A miss keeps the saved limits and their clock.
+    static func kept(fresh: UsageLevels?, saved: UsageLevels?, now: Date = Date()) -> UsageLevels {
+        if let fresh, fresh.hasReading { return stamp(fresh, at: now) }
+        if let saved, saved.hasReading { return saved }
+        return UsageLevels()
+    }
+
+    /// Marks a new reading. A clock that is already on the gate stays.
+    static func stamp(_ levels: UsageLevels, at date: Date) -> UsageLevels {
+        var copy = levels
+        copy.gates = levels.gates.map { gate in
+            var next = gate
+            if next.savedAt == nil { next.savedAt = date }
+            return next
+        }
+        return copy
+    }
+
+    /// Claude Desktop's saved plan history. `fh` and `sd` are percents already used.
+    static func parseClaudeHistory(_ data: Data) -> UsageLevels {
+        guard let root = json(data),
+              let samples = root["samples"] as? [[String: Any]],
+              let sample = samples.max(by: { sampleTime($0) < sampleTime($1) }),
+              let usage = sample["u"] as? [String: Any] else { return UsageLevels() }
+        let raw = sampleTime(sample)
+        let saved: Date? = raw > 0 ? Date(timeIntervalSince1970: raw) : nil
+        var gates: [UsageGate] = []
+        if let used = field(usage, key: "fh") {
+            gates.append(UsageGate(model: "Claude", window: "5 hours", remaining: remaining(usedPercent: used), savedAt: saved))
+        }
+        if let used = field(usage, key: "sd") {
+            gates.append(UsageGate(model: "Claude", window: "Week", remaining: remaining(usedPercent: used), savedAt: saved))
+        }
+        return UsageLevels(gates: gates)
+    }
+
+    /// The refresh button submits this. It does not install a downloaded app.
+    static func usageRefreshCommand(grok: String, folder: String, limitsPath: String) -> String {
+        let brief = "Force update the usage limits for every coding agent: Claude, Grok, ChatGPT, Antigravity, and Grok Bot. Saved limits: \(limitsPath). Report each remaining percent and the clock it was saved. Do not replace /Applications/Coucou.app. Do not push. Do not discard uncommitted work. Then stop and wait."
+        let pathExport = #"export PATH="$HOME/.grok/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH""#
+        return "\(pathExport); cd \(shellQuote(folder)) && exec \(shellQuote(grok)) --permission-mode plan --no-subagents --cwd \(shellQuote(folder)) --verbatim \(shellQuote(brief))"
+    }
+
+    static func shellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    private static func sampleTime(_ sample: [String: Any]) -> TimeInterval {
+        guard let raw = field(sample, key: "t"), raw > 0 else { return 0 }
+        return raw > 1_000_000_000_000 ? raw / 1000 : raw
     }
 
     /// The ring for one column. Five hours and week stay in place when that model has no such gate.
@@ -175,6 +284,9 @@ enum UsageBehavior {
         guard let remaining = gate.remaining else { return "\(name), \(gate.window), no reading yet" }
         if let when = replenishLabel(remaining: remaining, at: gate.replenishes) {
             return "\(name), \(gate.window), \(remaining)% left, refills \(when)"
+        }
+        if let saved = savedReading(at: gate.savedAt) {
+            return "\(name), \(gate.window), \(remaining)% left, saved \(saved.day), \(saved.time)"
         }
         return "\(name), \(gate.window), \(remaining)% left"
     }
