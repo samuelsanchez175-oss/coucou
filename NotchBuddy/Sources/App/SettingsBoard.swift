@@ -26,6 +26,10 @@ enum SettingsBoard {
         "trayWidth": SliderSpec(range: 4...30, step: 1, defaultValue: 12),
         "trayIconSize": SliderSpec(range: 36...140, step: 1, defaultValue: 100),
         "soundVolume": SliderSpec(range: 0...0.2, step: 0, defaultValue: 0.12),
+        "activityChinHeight": SliderSpec(range: 28...80, step: 1, defaultValue: 40),
+        "activityChinWidth": SliderSpec(range: 140...360, step: 1, defaultValue: 240),
+        "activityOpenWidth": SliderSpec(range: 180...480, step: 1, defaultValue: 340),
+        "activitySecondHeight": SliderSpec(range: 22...120, step: 1, defaultValue: 58),
     ]
 
     static var sliderNames: [String] { Array(sliders.keys) }
@@ -43,6 +47,8 @@ enum SettingsBoard {
         let snapped = spec.range.lowerBound + steps * spec.step
         return min(spec.range.upperBound, max(spec.range.lowerBound, snapped))
     }
+
+    static func fontScale(_ value: Double) -> Double { CoucouType.clamp(value) }
 
     static func soundPercent(_ value: Double) -> Int {
         let volume = commit(slider: "soundVolume", value: value) ?? 0
@@ -69,6 +75,7 @@ enum SettingsBoard {
         "quickPeek": true,
         "unhideAutomatically": true,
         "showSongChange": false,
+        "chinEnabled": true,
         "nookEnabled": true,
         "widgetDividers": true,
         "showPastEvents": false,

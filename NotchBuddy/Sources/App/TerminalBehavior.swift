@@ -40,7 +40,8 @@ enum TerminalBehavior {
         islandWidth - overviewPageInset * 2 - overviewLeftCard - overviewCardGap
     }
     /// Extra open-drawer height so the home player sits under the usage rows.
-    static let homePlayerDrop: CGFloat = 44
+    /// This is the whole player band. A shorter drop let that band eat the last row.
+    static let homePlayerDrop: CGFloat = 52
     static let overviewHeight: CGFloat = 8 + 34 + clusterHeight + 10 + homePlayerDrop
 
     /// Vertical center of the four faces, in the overview's content coordinates.
@@ -873,10 +874,69 @@ enum TerminalBehavior {
         }
     }
 
+    /// The line under a face. Green, Orange, Purple, and Red stay put.
+    /// A name typed on that face stays until the terminal closes. A window title does not.
+    static func stableFaceName(_ slotID: String) -> String {
+        switch slotID {
+        case "green": return "Green"
+        case "orange": return "Orange"
+        case "purple": return "Purple"
+        case "red": return "Red"
+        default: return "Terminal"
+        }
+    }
+
+    static func faceLabel(slotID: String, savedName: String, restingName: String) -> String {
+        let saved = savedName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resting = restingName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !saved.isEmpty, saved != resting { return saved }
+        return stableFaceName(slotID)
+    }
+
+    /// The field under the faces. Accessibility off does not invite a line into Terminal.
+    static func promptPlaceholder(accessibilityOff: Bool, faceName: String) -> String {
+        if accessibilityOff { return "Accessibility is off" }
+        let name = faceName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return "Write to \(name.isEmpty ? "Terminal" : name)"
+    }
+
+    static func canSendToTerminal(accessibilityOff: Bool) -> Bool {
+        !accessibilityOff
+    }
+
     /// The name Terminal put on the window. A blank title keeps the fallback.
     static func adoptedName(windowTitle: String, fallback: String) -> String {
         let trimmed = windowTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? fallback : trimmed
+    }
+
+    /// Up to three nouns from the window, short enough for the blob.
+    /// A blank title stays blank so a closed terminal does not lock a placeholder.
+    static func lockedPhrase(windowTitle: String) -> String {
+        let words = titleWords(windowTitle)
+        guard !words.isEmpty else { return "" }
+        return nounPhrase(words)
+    }
+
+    /// The name on the settings card and under the blob.
+    /// A locked phrase stays. Otherwise the window's nouns, then the color.
+    static func shownTerminalName(locked: String, windowTitle: String, slotID: String) -> String {
+        let kept = locked.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !kept.isEmpty, !isPlaceholderName(kept) { return kept }
+        let phrase = lockedPhrase(windowTitle: windowTitle)
+        if !phrase.isEmpty { return phrase }
+        return stableFaceName(slotID)
+    }
+
+    /// The first nouns in the title, three at most, that still fit under the blob.
+    static func nounPhrase(_ words: [String]) -> String {
+        let content = words.filter { !isTitleStop($0) && !isWeakLock($0) }
+        let topical = content.filter { !isCommonVerb($0) && !isGenericTitleWord($0) && !isBareNumber($0) }
+        let readable = content.filter { !isCommonVerb($0) && !isBareNumber($0) }
+        let pool = topical.isEmpty ? (readable.isEmpty ? content : readable) : topical
+        let picked = Array(pool.prefix(3))
+        guard !picked.isEmpty else { return words.first ?? "" }
+        return wordsThatFit(picked, maxWidth: blobNameWidth)
     }
 
     /// The topic noun in the terminal's title. A blank title keeps the fallback.

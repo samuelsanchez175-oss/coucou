@@ -325,7 +325,7 @@ enum LiveActivityBehavior {
 enum SettingsNotchPage: Equatable {
     /// Open home, for general notch settings and gestures.
     case home
-    /// Compact shelf, where live activities sit.
+    /// Collapsed chin, so the chin sliders can be checked on the notch.
     case activities
     /// Open Nook widgets.
     case nook

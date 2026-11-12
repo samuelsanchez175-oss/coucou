@@ -72,6 +72,135 @@ struct NotchClearance: Equatable {
     }
 }
 
+/// Live activity placement. The main display drops a chin under the camera.
+/// A second display keeps the line in the bar and can make it wider.
+struct ActivityChin: Equatable {
+    var physicalNotch: Bool
+    var housingHeight: CGFloat
+    /// Points of black under the camera. The main display uses this.
+    var chinHeight: CGFloat
+    /// Banner width under the camera.
+    var chinWidth: CGFloat
+    /// Line width on a display with no camera.
+    var openWidth: CGFloat
+    /// Tallness of the chin on a display with no camera.
+    var barHeight: CGFloat = Self.secondDisplayBar
+    var fontSize: CGFloat
+    var showing: Bool
+
+    /// The face plus air, so a larger font is not cut off.
+    var lineBox: CGFloat { max(22, fontSize + 10) }
+
+    /// Extra height under the housing. Zero on a second display.
+    var drop: CGFloat {
+        guard physicalNotch, showing else { return 0 }
+        return max(lineBox, chinHeight)
+    }
+
+    var activityWidth: CGFloat {
+        let asked = physicalNotch ? chinWidth : openWidth
+        return max(fontSize * 8, asked)
+    }
+
+    /// Black on each side of a second-display line.
+    /// The faces and the waveform sit in that room, clear of the rounded corner.
+    static let secondDisplayGutter: CGFloat = 104
+    /// Collapsed bar on a display with no camera.
+    /// Tall enough that the face grid clears the screen edge.
+    static let secondDisplayBar: CGFloat = 58
+    /// How far a closed face draws past the grid center, including the canvas past the cell.
+    static let faceReach: CGFloat = 20
+    /// Closed waveform width. The seven bars are this wide.
+    static let shelfSpan: CGFloat = 28
+    static let corner: CGFloat = 14
+    static let cornerAir: CGFloat = 4
+    static let clusterGap: CGFloat = 8
+
+    /// Waveform center, measured from the right edge. The bars clear the corner.
+    static var waveInset: CGFloat { corner + cornerAir + shelfSpan / 2 }
+    /// Face-grid center, measured from the right edge. The grid sits left of the waveform.
+    static var faceInset: CGFloat { waveInset + shelfSpan / 2 + clusterGap + faceReach }
+    /// The closed face cluster, top to bottom, at full size. It is the tallest mark in the bar.
+    static var faceSpan: CGFloat { faceReach * 2 }
+
+    /// 1 when the bar holds the faces. A shorter bar shrinks Mochi, the line, the faces, and the waveform together.
+    static func contentScale(barHeight: CGFloat) -> CGFloat {
+        let air: CGFloat = 8
+        let room = max(1, barHeight - air)
+        return min(1, room / max(1, faceSpan))
+    }
+
+    /// The main display keeps the ear size. A second display follows its bar.
+    var contentScale: CGFloat {
+        guard !physicalNotch else { return 1 }
+        return Self.contentScale(barHeight: max(lineBox, barHeight))
+    }
+
+    static func plainMochiCenter(width: CGFloat) -> CGFloat {
+        min(max(0, width) / 2, 32)
+    }
+
+    static func plainFaceCenter(width: CGFloat) -> CGFloat {
+        let span = max(0, width)
+        return max(span / 2, span - faceInset)
+    }
+
+    static func plainWaveCenter(width: CGFloat) -> CGFloat {
+        let span = max(0, width)
+        return max(shelfSpan / 2, span - waveInset)
+    }
+
+    /// The closed island has to be at least this wide while an activity is up.
+    var widthFloor: CGFloat {
+        guard showing else { return 0 }
+        if physicalNotch { return activityWidth }
+        return activityWidth + Self.secondDisplayGutter * 2
+    }
+
+    func restingHeight(fallback: CGFloat) -> CGFloat {
+        guard showing else { return fallback }
+        if drop > 0 { return max(fallback, housingHeight + drop) }
+        // A second display stays in the bar. The housing height does not hold it up.
+        return max(lineBox, barHeight)
+    }
+
+    /// Off keeps the line in the bar. A folded main-display chin does the same.
+    /// A second display does not fold, so `folded` only applies under a camera.
+    static func shown(enabled: Bool, physicalNotch: Bool, folded: Bool) -> Bool {
+        guard enabled else { return false }
+        return !(physicalNotch && folded)
+    }
+
+    /// Under the camera on the main display. In the bar on a second display.
+    /// `drawnHeight` is the shape on screen. Omit it for the settled chin.
+    func activityCenterY(fallback: CGFloat, drawnHeight: CGFloat? = nil) -> CGFloat {
+        guard physicalNotch, showing else {
+            return max(lineBox / 2, (drawnHeight ?? fallback) / 2)
+        }
+        guard let drawnHeight else { return housingHeight + drop / 2 }
+        let grown = max(0, drawnHeight - housingHeight)
+        // An open panel is taller than any chin. The line stays in the settled chin
+        // while that panel shrinks. A chin slider stays inside the chin, so the line rides it.
+        let dropNow = grown > 100 ? drop : grown
+        return housingHeight + dropNow / 2
+    }
+}
+
+/// One scale for Coucou text. Frames that use `points` grow with the face.
+enum CoucouType {
+    static let minimum = 0.8
+    static let maximum = 1.6
+
+    static func clamp(_ scale: Double) -> Double {
+        let clamped = min(maximum, max(minimum, scale))
+        return (clamped * 10).rounded() / 10
+    }
+
+    static func points(_ base: CGFloat, scale: Double) -> CGFloat {
+        base * CGFloat(clamp(scale))
+    }
+}
+
 /// Shared by the compact view and the greeting's collapse destination.
 struct IslandRestingLayout {
     let width: CGFloat

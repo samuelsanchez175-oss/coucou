@@ -4,6 +4,7 @@ cd "$(dirname "$0")/.."
 TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/coucou-settings-controls.XXXXXX")"
 trap 'rm -rf "$TEST_DIR"' EXIT
 swiftc -parse-as-library \
+    NotchBuddy/Sources/CoucouKit/IslandScreenGeometry.swift \
     NotchBuddy/Sources/App/NookLayout.swift \
     NotchBuddy/Sources/App/LiveActivityBehavior.swift \
     NotchBuddy/Sources/App/SettingsBoard.swift \

@@ -64,10 +64,6 @@ struct SettingsView: View {
     @State private var calcomKey: String    = KeychainStore.shared.get("calcom-api-key")  ?? ""
     @State private var notionKey: String    = KeychainStore.shared.get("notion-api-key")  ?? ""
 
-    // Hotkey
-    @State private var hotkeyFlags: UInt    = AppState.shared.hotkeyFlags
-    @State private var hotkeyCode: UInt16   = AppState.shared.hotkeyCode
-
     // Vercel project filter
     @State private var vercelProjects: [String] = []
     @State private var loadingVercel: Bool = false
@@ -75,14 +71,6 @@ struct SettingsView: View {
     // n8n workflow filter
     @State private var n8nWorkflows: [String] = []
     @State private var loadingN8n: Bool = false
-
-    // Bindings in minutes for the absence field
-    private var absenceMinutes: Binding<Double> {
-        Binding(
-            get: { state.absenceInterval / 60 },
-            set: { state.absenceInterval = max(1, $0) * 60 }
-        )
-    }
 
     var body: some View {
         ScrollView {
@@ -123,7 +111,7 @@ struct SettingsView: View {
                         }
 
                         Text("The notch chat and each Claude terminal use this model. The list comes from your Anthropic account.")
-                            .font(.system(size: 11))
+                            .coucouFont(11)
                             .foregroundColor(.secondary)
                     }
                     .padding(6)
@@ -165,7 +153,7 @@ struct SettingsView: View {
                         }
 
                         Text("The notch chat and each Grok terminal use this model. The key stays in the Keychain on this Mac.")
-                            .font(.system(size: 11))
+                            .coucouFont(11)
                             .foregroundColor(.secondary)
                     }
                     .padding(6)
@@ -179,7 +167,7 @@ struct SettingsView: View {
                                 Image(systemName: "exclamationmark.triangle.fill")
                                     .foregroundColor(.orange)
                                 Text("Hook timeout outdated — update to fix approvals")
-                                    .font(.system(size: 11))
+                                    .coucouFont(11)
                                     .foregroundColor(.orange)
                             }
                             #if APPSTORE
@@ -190,7 +178,7 @@ struct SettingsView: View {
                         }
                         #if APPSTORE
                         Text("~/.claude/coucou/nb-hook")
-                            .font(.system(size: 11, design: .monospaced))
+                            .coucouFont(11, design: .monospaced)
                             .foregroundColor(.secondary)
                         HStack(spacing: 10) {
                             Button("Install hooks") { installHooksAppStore() }
@@ -200,7 +188,7 @@ struct SettingsView: View {
                         }
                         #else
                         Text("nb-hook : \(HookServer.hookScriptPath)")
-                            .font(.system(size: 11, design: .monospaced))
+                            .coucouFont(11, design: .monospaced)
                             .foregroundColor(.secondary)
                         HStack(spacing: 10) {
                             Button("Install hooks") { installHooks() }
@@ -214,7 +202,7 @@ struct SettingsView: View {
                         if showDiff {
                             ScrollView {
                                 Text(pendingHookJSON)
-                                    .font(.system(size: 10, design: .monospaced))
+                                    .coucouFont(10, design: .monospaced)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
                             .frame(height: 140)
@@ -244,7 +232,7 @@ struct SettingsView: View {
                         Text(geminiHooksInstalled
                              ? "Hooks installed — restart Gemini CLI to activate"
                              : "~/.gemini/settings.json")
-                            .font(.system(size: 11, design: .monospaced))
+                            .coucouFont(11, design: .monospaced)
                             .foregroundColor(.secondary)
                         HStack(spacing: 10) {
                             Button("Install hooks") { triggerGeminiPreview(install: true) }
@@ -255,7 +243,7 @@ struct SettingsView: View {
                         if showGeminiDiff {
                             ScrollView {
                                 Text(pendingGeminiJSON)
-                                    .font(.system(size: 10, design: .monospaced))
+                                    .coucouFont(10, design: .monospaced)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
                             .frame(height: 140)
@@ -281,7 +269,7 @@ struct SettingsView: View {
                         Text(agyHooksInstalled
                              ? "Hooks installed — restart Antigravity to activate"
                              : "~/.gemini/config/hooks.json")
-                            .font(.system(size: 11, design: .monospaced))
+                            .coucouFont(11, design: .monospaced)
                             .foregroundColor(.secondary)
                         HStack(spacing: 10) {
                             Button("Install hooks") { triggerAgyPreview(install: true) }
@@ -292,7 +280,7 @@ struct SettingsView: View {
                         if showAgyDiff {
                             ScrollView {
                                 Text(pendingAgyJSON)
-                                    .font(.system(size: 10, design: .monospaced))
+                                    .coucouFont(10, design: .monospaced)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
                             .frame(height: 140)
@@ -326,7 +314,7 @@ struct SettingsView: View {
                         VStack(alignment: .leading, spacing: 5) {
                             HStack(spacing: 6) {
                                 Circle().fill(Color(hex: "#0570DE")).frame(width: 8, height: 8)
-                                Text("Stripe").font(.system(size: 12, weight: .semibold))
+                                Text("Stripe").coucouFont(12, weight: .semibold)
                             }
                             SecureField("Secret key  (sk_live_… or sk_test_…)", text: $stripeKey)
                                 .textFieldStyle(.roundedBorder)
@@ -336,7 +324,7 @@ struct SettingsView: View {
                         VStack(alignment: .leading, spacing: 5) {
                             HStack(spacing: 6) {
                                 Circle().fill(Color(hex: "#C9956A")).frame(width: 8, height: 8)
-                                Text("Cal.com").font(.system(size: 12, weight: .semibold))
+                                Text("Cal.com").coucouFont(12, weight: .semibold)
                             }
                             SecureField("API key  (cal_live_…)", text: $calcomKey)
                                 .textFieldStyle(.roundedBorder)
@@ -346,7 +334,7 @@ struct SettingsView: View {
                         VStack(alignment: .leading, spacing: 5) {
                             HStack(spacing: 6) {
                                 Circle().fill(Color(hex: "#E8E8E8")).frame(width: 8, height: 8)
-                                Text("Notion").font(.system(size: 12, weight: .semibold))
+                                Text("Notion").coucouFont(12, weight: .semibold)
                             }
                             SecureField("Integration token  (secret_…)", text: $notionKey)
                                 .textFieldStyle(.roundedBorder)
@@ -358,91 +346,10 @@ struct SettingsView: View {
                     .padding(6)
                 }
 
-                // MARK: Son
-                GroupBox("Sound") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Toggle("Enable sounds", isOn: $state.soundEnabled)
-                        HStack(spacing: 8) {
-                            Text("Volume")
-                                .frame(width: 56, alignment: .leading)
-                            Slider(value: Binding(
-                                get: { state.soundVolume },
-                                set: { state.soundVolume = SettingsBoard.commit(slider: "soundVolume", value: $0) ?? $0 }
-                            ), in: 0...0.2)
-                                .disabled(!state.soundEnabled)
-                            Text("\(SettingsBoard.soundPercent(state.soundVolume)) %")
-                                .frame(width: 36, alignment: .trailing)
-                                .monospacedDigit()
-                        }
-                    }
-                    .padding(6)
-                }
-
-                // MARK: Timings
-                GroupBox("Behavior") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack(spacing: 8) {
-                            Text("Close after")
-                            TextField("60", value: $state.autoCloseInterval, format: .number)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: 64)
-                            Text("s inactive")
-                        }
-                        HStack(spacing: 8) {
-                            Text("Hide after")
-                            TextField("3", value: absenceMinutes, format: .number)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: 48)
-                            Text("min without movement")
-                        }
-                    }
-                    .padding(6)
-                }
-
-                // MARK: Active pills
-                GroupBox("Active pills") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            Picker("White blob", selection: whiteBlobChoice) {
-                                Text("Grok Bot").tag(PillCatalog.grokBotPillId)
-                                Text("VS Code").tag(PillCatalog.vsCodePillId)
-                            }
-                            .labelsHidden()
-                            .pickerStyle(.menu)
-                            .frame(width: 140, alignment: .leading)
-                            Spacer()
-                            Text("Always active")
-                                .font(.system(size: 11))
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                    .padding(6)
-                }
-
-                // MARK: Hotkey
-                GroupBox("Hotkey") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Toggle("Show island with shortcut", isOn: $state.hotkeyEnabled)
-                        if state.hotkeyEnabled {
-                            HStack(spacing: 8) {
-                                Text("Shortcut")
-                                    .frame(width: 70, alignment: .leading)
-                                ShortcutRecorderButton(flags: $hotkeyFlags, code: $hotkeyCode)
-                                    .onChange(of: hotkeyFlags) { _, v in state.hotkeyFlags = v }
-                                    .onChange(of: hotkeyCode)  { _, v in state.hotkeyCode  = v }
-                                Text("presses this → island opens")
-                                    .font(.system(size: 11))
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                    }
-                    .padding(6)
-                }
-
                 // MARK: Startup
                 if !statusMessage.isEmpty {
                     Text(statusMessage)
-                        .font(.system(size: 12))
+                        .coucouFont(12)
                         .foregroundColor(statusMessage.hasPrefix("❌") ? .red : .secondary)
                         .padding(.horizontal, 2)
                 }
@@ -472,17 +379,6 @@ struct SettingsView: View {
             }
         }
         .frame(minWidth: 420, maxWidth: .infinity, minHeight: 320, maxHeight: .infinity)
-    }
-
-    /// Grok Bot is the first choice. VS Code is the other choice for the white blob.
-    private var whiteBlobChoice: Binding<String> {
-        Binding(
-            get: {
-                let id = state.mainPillId
-                return PillCatalog.whiteBlobPillIds.contains(id) ? id : PillCatalog.defaultMainPillId
-            },
-            set: { state.setMainPill($0) }
-        )
     }
 
     // MARK: - Actions
@@ -744,7 +640,7 @@ struct IntegrationFilterRow: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Text(label)
-                    .font(.system(size: 11))
+                    .coucouFont(11)
                     .foregroundColor(.secondary)
                 Spacer()
                 if loading {
@@ -770,17 +666,124 @@ struct IntegrationFilterRow: View {
                                 filter = SettingsBoard.toggleFilter(item: item, on: on, filter: filter, items: items)
                             }
                         ))
-                        .font(.system(size: 11))
+                        .coucouFont(11)
                         .toggleStyle(.checkbox)
                     }
                 }
                 .padding(.leading, 4)
                 if !filter.isEmpty {
                     Text("Watching \(filter.count) of \(items.count)")
-                        .font(.system(size: 10))
+                        .coucouFont(10)
                         .foregroundColor(.secondary)
                 }
             }
+        }
+    }
+}
+
+/// Sound, close, hide, and the island shortcut. These follow the notch, so they sit on General.
+struct NotchBehaviorSettings: View {
+    @ObservedObject private var state = AppState.shared
+    @State private var hotkeyFlags: UInt = AppState.shared.hotkeyFlags
+    @State private var hotkeyCode: UInt16 = AppState.shared.hotkeyCode
+
+    private var absenceMinutes: Binding<Double> {
+        Binding(
+            get: { state.absenceInterval / 60 },
+            set: { state.absenceInterval = max(1, $0) * 60 }
+        )
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            GroupBox("Sound") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Toggle("Enable sounds", isOn: $state.soundEnabled)
+                    HStack(spacing: 8) {
+                        Text("Volume")
+                            .frame(width: 56, alignment: .leading)
+                        Slider(value: Binding(
+                            get: { state.soundVolume },
+                            set: { state.soundVolume = SettingsBoard.commit(slider: "soundVolume", value: $0) ?? $0 }
+                        ), in: 0...0.2)
+                            .disabled(!state.soundEnabled)
+                        Text("\(SettingsBoard.soundPercent(state.soundVolume)) %")
+                            .frame(width: 36, alignment: .trailing)
+                            .monospacedDigit()
+                    }
+                }
+                .padding(6)
+            }
+            GroupBox("Behavior") {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 8) {
+                        Text("Close after")
+                        TextField("60", value: $state.autoCloseInterval, format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 64)
+                        Text("s inactive")
+                    }
+                    HStack(spacing: 8) {
+                        Text("Hide after")
+                        TextField("3", value: absenceMinutes, format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 48)
+                        Text("min without movement")
+                    }
+                }
+                .padding(6)
+            }
+            GroupBox("Hotkey") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Toggle("Show island with shortcut", isOn: $state.hotkeyEnabled)
+                    if state.hotkeyEnabled {
+                        HStack(spacing: 8) {
+                            Text("Shortcut")
+                                .frame(width: 70, alignment: .leading)
+                            ShortcutRecorderButton(flags: $hotkeyFlags, code: $hotkeyCode)
+                                .onChange(of: hotkeyFlags) { _, v in state.hotkeyFlags = v }
+                                .onChange(of: hotkeyCode) { _, v in state.hotkeyCode = v }
+                            Text("presses this → island opens")
+                                .coucouFont(11)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+                .padding(6)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+}
+
+/// The white blob stays on. It is a nook pill, so the choice sits with the widgets.
+struct ActivePillsSettings: View {
+    @ObservedObject private var state = AppState.shared
+
+    private var whiteBlobChoice: Binding<String> {
+        Binding(
+            get: {
+                let id = state.mainPillId
+                return PillCatalog.whiteBlobPillIds.contains(id) ? id : PillCatalog.defaultMainPillId
+            },
+            set: { state.setMainPill($0) }
+        )
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("Active pills")
+                .coucouFont(12, weight: .semibold)
+            Picker("White blob", selection: whiteBlobChoice) {
+                Text("Grok Bot").tag(PillCatalog.grokBotPillId)
+                Text("VS Code").tag(PillCatalog.vsCodePillId)
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .frame(width: 140, alignment: .leading)
+            Text("Always active")
+                .coucouFont(11)
+                .foregroundStyle(.secondary)
         }
     }
 }
@@ -812,7 +815,7 @@ struct ShortcutRecorderButton: View {
             }
         } label: {
             Text(isRecording ? "Press keys…" : shortcutLabel)
-                .font(.system(size: 11, design: .monospaced))
+                .coucouFont(11, design: .monospaced)
                 .padding(.horizontal, 8).padding(.vertical, 3)
                 .background(isRecording ? Color.accentColor.opacity(0.12) : Color(NSColor.controlBackgroundColor))
                 .cornerRadius(5)

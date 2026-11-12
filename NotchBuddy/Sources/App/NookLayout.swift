@@ -339,6 +339,12 @@ enum NookLayout {
         return nonempty(title)
     }
 
+    /// The chin sliders need a line on the notch. A real activity stays. A tray or AirDrop line does not sit in the chin.
+    static func chinPreviewHeadline(_ current: NookHeadline?) -> NookHeadline {
+        if let current, current.id != "tray", current.id != "drop" { return current }
+        return NookHeadline(id: "chin", text: "Live activity", symbol: "calendar")
+    }
+
     /// A status line stays inside the hardware notch. It does not add side wings.
     static func restingExtraWidth(text: String?) -> CGFloat {
         _ = text
@@ -385,6 +391,21 @@ enum NookLayout {
     /// The tray count hides on its own 10 second clock, so inactivity must not swallow it.
     static func keepsTrayLineAwake(headlineID: String?) -> Bool {
         headlineID == "tray"
+    }
+
+    /// The main-display chin sits under the camera and covers clicks. It folds after this long.
+    static let mainChinLifetime: TimeInterval = 7
+
+    /// A charging-watt change is the same chin. A different activity, or a new song, starts the 7 seconds again.
+    static func restartsMainChinClock(
+        previousID: String?,
+        previousText: String?,
+        nextID: String,
+        nextText: String
+    ) -> Bool {
+        guard let previousID else { return true }
+        if previousID != nextID { return true }
+        return nextID == "media" && previousText != nextText
     }
 
     /// The collapsed notch stays the height of the menu bar. Volume, a track,

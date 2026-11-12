@@ -50,6 +50,20 @@ final class NookPreferences: ObservableObject {
     @Published var quickPeek: Bool = true
     @Published var unhideAutomatically: Bool = true
     @Published var showSongChange: Bool = false
+    /// The live-activity chin. Off keeps the line in the bar on every display.
+    @Published var chinEnabled: Bool = true
+    /// Black band under the MacBook camera. Live activities sit in it.
+    @Published var activityChinHeight: Double = 40
+    /// Width of that band on the main display.
+    @Published var activityChinWidth: Double = 240
+    /// Activity width on a display with no camera. It does not drop.
+    @Published var activityOpenWidth: Double = 340
+    /// Chin height on a display with no camera. The line stays in the bar.
+    @Published var activitySecondHeight: Double = 58
+    /// 1 is the normal face. Settings and the activity line use this scale.
+    @Published var coucouFontScale: Double = 1
+    /// 1 is the normal settings page. The notch does not use this scale.
+    @Published var settingsFontScale: Double = 1
     /// Volume and brightness keys draw in the notch. Off until the user turns it on.
     @Published var hudReplacement: Bool = false {
         didSet {
@@ -213,6 +227,13 @@ final class NookPreferences: ObservableObject {
         quickPeek = SettingsBoard.defaultToggle("quickPeek") ?? true
         unhideAutomatically = SettingsBoard.defaultToggle("unhideAutomatically") ?? true
         showSongChange = SettingsBoard.defaultToggle("showSongChange") ?? false
+        chinEnabled = SettingsBoard.defaultToggle("chinEnabled") ?? true
+        activityChinHeight = SettingsBoard.defaultValue("activityChinHeight") ?? 40
+        activityChinWidth = SettingsBoard.defaultValue("activityChinWidth") ?? 240
+        activityOpenWidth = SettingsBoard.defaultValue("activityOpenWidth") ?? 340
+        activitySecondHeight = SettingsBoard.defaultValue("activitySecondHeight") ?? 58
+        coucouFontScale = SettingsBoard.fontScale(1)
+        settingsFontScale = SettingsBoard.fontScale(1)
         hudReplacement = SettingsBoard.defaultToggle("hudReplacement") ?? false
         activities = Self.defaultActivities
         nookEnabled = SettingsBoard.defaultToggle("nookEnabled") ?? true
@@ -261,6 +282,17 @@ final class NookPreferences: ObservableObject {
         loadBool("quickPeek", &quickPeek)
         loadBool("unhideAutomatically", &unhideAutomatically)
         loadBool("showSongChange", &showSongChange)
+        loadBool("chinEnabled", &chinEnabled)
+        loadDouble("activityChinHeight", &activityChinHeight)
+        loadDouble("activityChinWidth", &activityChinWidth)
+        loadDouble("activityOpenWidth", &activityOpenWidth)
+        loadDouble("activitySecondHeight", &activitySecondHeight)
+        if defaults.object(forKey: key("coucouFontScale")) != nil {
+            coucouFontScale = SettingsBoard.fontScale(defaults.double(forKey: key("coucouFontScale")))
+        }
+        if defaults.object(forKey: key("settingsFontScale")) != nil {
+            settingsFontScale = SettingsBoard.fontScale(defaults.double(forKey: key("settingsFontScale")))
+        }
         loadBool("hudReplacement", &hudReplacement)
         if let data = d.data(forKey: key("activities")),
            let saved = try? JSONDecoder().decode([LiveActivityChoice].self, from: data),
@@ -359,6 +391,13 @@ final class NookPreferences: ObservableObject {
         d.set(quickPeek, forKey: key("quickPeek"))
         d.set(unhideAutomatically, forKey: key("unhideAutomatically"))
         d.set(showSongChange, forKey: key("showSongChange"))
+        d.set(chinEnabled, forKey: key("chinEnabled"))
+        d.set(activityChinHeight, forKey: key("activityChinHeight"))
+        d.set(activityChinWidth, forKey: key("activityChinWidth"))
+        d.set(activityOpenWidth, forKey: key("activityOpenWidth"))
+        d.set(activitySecondHeight, forKey: key("activitySecondHeight"))
+        d.set(coucouFontScale, forKey: key("coucouFontScale"))
+        d.set(settingsFontScale, forKey: key("settingsFontScale"))
         d.set(hudReplacement, forKey: key("hudReplacement"))
         if let data = try? JSONEncoder().encode(activities) { d.set(data, forKey: key("activities")) }
         d.set(nookEnabled, forKey: key("nookEnabled"))

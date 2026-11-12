@@ -45,7 +45,43 @@ enum TerminalBehaviorTests {
         testNookKeepsTheSharedHeader()
         testHeaderSitsOnTheMenuBar()
         testBlobOpensAWindowAtTwentyPoint()
-        print("Terminal behavior: 39 cases passed")
+        testFaceKeepsAStableName()
+        print("Terminal behavior: 40 cases passed")
+    }
+
+    /// The four faces keep Green, Orange, Purple, and Red.
+    /// A window title such as permission-mode does not replace that name.
+    /// Accessibility off does not invite a line into Terminal.
+    /// The empty card opens Grok Bot.
+    static func testFaceKeepsAStableName() {
+        precondition(TerminalBehavior.faceLabel(slotID: "green", savedName: "Terminal 1", restingName: "Terminal 1") == "Green")
+        precondition(TerminalBehavior.faceLabel(slotID: "orange", savedName: "Terminal 2", restingName: "Terminal 2") == "Orange")
+        precondition(TerminalBehavior.faceLabel(slotID: "purple", savedName: "Terminal 3", restingName: "Terminal 3") == "Purple")
+        precondition(TerminalBehavior.faceLabel(slotID: "red", savedName: "Terminal 4", restingName: "Terminal 4") == "Red")
+        precondition(TerminalBehavior.faceLabel(slotID: "green", savedName: "Notes", restingName: "Terminal 1") == "Notes")
+        precondition(TerminalBehavior.faceLabel(slotID: "orange", savedName: "permission-mode", restingName: "permission-mode") == "Orange")
+        precondition(TerminalBehavior.promptPlaceholder(accessibilityOff: true, faceName: "Coucou") == "Accessibility is off")
+        precondition(TerminalBehavior.promptPlaceholder(accessibilityOff: false, faceName: "Green") == "Write to Green")
+        precondition(TerminalBehavior.canSendToTerminal(accessibilityOff: true) == false)
+        precondition(TerminalBehavior.canSendToTerminal(accessibilityOff: false))
+
+        let desk = try! String(contentsOfFile: "NotchBuddy/Sources/App/TerminalDesk.swift", encoding: .utf8)
+        guard let sendStart = desk.range(of: "func send()"),
+              let sendEnd = desk.range(of: "// MARK: - Private") else {
+            preconditionFailure("send() moved")
+        }
+        let send = String(desk[sendStart.lowerBound..<sendEnd.lowerBound])
+        precondition(send.contains("canSendToTerminal"), "a line can still reach Terminal while Accessibility is off")
+
+        let overview = try! String(contentsOfFile: "NotchBuddy/Sources/App/IslandViewContent.swift", encoding: .utf8)
+        guard let emptyStart = overview.range(of: "struct EmptyStateView"),
+              let emptyEnd = overview.range(of: "// MARK: - Approval") else {
+            preconditionFailure("the empty card moved")
+        }
+        let empty = String(overview[emptyStart.lowerBound..<emptyEnd.lowerBound])
+        precondition(empty.contains("Open Grok Bot"), "the empty card does not open Grok Bot")
+        precondition(empty.contains("GrokBotApp.open()"), "the empty card does not open Grok Bot")
+        precondition(!empty.contains("Ask Claude"), "the empty card still says Ask Claude")
     }
 
     /// A download that prints "45%" must stay Working. Treating every
@@ -92,8 +128,8 @@ enum TerminalBehaviorTests {
         )
         precondition(TerminalBehavior.compactSide == 28)
         // Four faces, the Attach row, and the lock at the bottom of the tile.
-        precondition(TerminalBehavior.homePlayerDrop == 44, "the home player needs room under the usage rows")
-        precondition(TerminalBehavior.overviewHeight == 324, "overview is \(TerminalBehavior.overviewHeight)")
+        precondition(TerminalBehavior.homePlayerDrop == 52, "the drawer grows by the whole player band")
+        precondition(TerminalBehavior.overviewHeight == 332, "overview is \(TerminalBehavior.overviewHeight)")
         precondition(TerminalBehavior.faceColumn == 108)
         precondition(TerminalBehavior.faceGridWidth == 232, "both face columns share one centered group")
         let right = TerminalBehavior.overviewRightCard(islandWidth: IslandConst.expandedWidth)
@@ -1088,6 +1124,21 @@ enum TerminalBehaviorTests {
         precondition(settings.contains("Idle") && settings.contains("New response") && settings.contains("Needs input"), "the lights name the three states")
         precondition(settings.contains("launchTool"), "each terminal can choose its assistant")
         precondition(settings.contains("assistantDetail"), "the terminal row uses the model saved in Keys")
+        precondition(settings.contains("onHover"), "the Keys line stays hidden until the assistant control is hovered")
+        precondition(!settings.contains("Window name:"), "the window name stays in the open-window menu")
+        precondition(!settings.contains("Name before a window"), "the card uses the blob name")
+        precondition(settings.contains("shownTerminalName") || settings.contains("blobLabel"), "the card title is the blob's short name")
+        let penwork = "samuel — i. - Thinking - Penwork Studios Simile Literalization Pa… - grok — grok • node — 89×70"
+        let phrase = TerminalBehavior.lockedPhrase(windowTitle: penwork)
+        precondition(!phrase.isEmpty && phrase.split(separator: " ").count <= 3, phrase)
+        precondition(phrase.contains("Penwork"), phrase)
+        let young = TerminalBehavior.lockedPhrase(windowTitle: "samuel — Young Thug and Lil Wayne figurative pass… - grok — grok • node — 88×70")
+        precondition(young.split(separator: " ").count <= 3, young)
+        precondition(young.contains("Young"), young)
+        precondition(TerminalBehavior.lockedPhrase(windowTitle: "") == "")
+        precondition(TerminalBehavior.shownTerminalName(locked: "Penwork Studios", windowTitle: "other", slotID: "green") == "Penwork Studios")
+        precondition(TerminalBehavior.shownTerminalName(locked: "", windowTitle: "", slotID: "orange") == "Orange")
+        precondition(TerminalBehavior.shownTerminalName(locked: "Terminal 2", windowTitle: penwork, slotID: "orange").contains("Penwork"))
         let keys = try! String(contentsOfFile: "NotchBuddy/Sources/App/SettingsView.swift", encoding: .utf8)
         let keysBody = sourceSlice(keys, from: "var body: some View", until: "private func applyCustomModel")
         precondition(keysBody.contains("HStack(alignment: .top"), "the Keys page sits in two columns")

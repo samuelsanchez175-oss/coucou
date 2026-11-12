@@ -25,7 +25,8 @@ enum SettingsControlTests {
         testShortcutRecorderIgnoresAPlainKey()
         testInvertSwitchStaysOffUntilHorizontalGesturesAreOn()
         testVolumeAndBrightnessStayOffUntilTurnedOn()
-        print("Settings controls: 21 cases passed")
+        testSettingsFontStaysOnTheSettingsPage()
+        print("Settings controls: 22 cases passed")
     }
 
     /// A slider writes the number on the knob. A value past either end stops at that end.
@@ -50,6 +51,17 @@ enum SettingsControlTests {
             ("soundVolume", 1, 0.2),
             ("soundVolume", -0.1, 0),
             ("soundVolume", 0.12, 0.12),
+            ("activityChinHeight", 90, 80),
+            ("activityChinHeight", 10, 28),
+            ("activityChinHeight", 40.6, 41),
+            ("activityChinWidth", 100, 140),
+            ("activityChinWidth", 400, 360),
+            ("activityOpenWidth", 100, 180),
+            ("activityOpenWidth", 500, 480),
+            ("activitySecondHeight", 10, 22),
+            ("activitySecondHeight", 30, 30),
+            ("activitySecondHeight", 200, 120),
+            ("activitySecondHeight", 58.4, 58),
         ]
         for (name, raw, expect) in samples {
             let committed = SettingsBoard.commit(slider: name, value: raw)
@@ -60,6 +72,7 @@ enum SettingsControlTests {
             "contentPadding", "notchWidthOffset", "notchHeightOffset",
             "handlerWidth", "handlerHeight", "inactivityTimeout",
             "daysBehind", "daysAhead", "dropAreaWidth", "trayWidth", "trayIconSize", "soundVolume",
+            "activityChinHeight", "activityChinWidth", "activityOpenWidth", "activitySecondHeight",
         ])
     }
 
@@ -78,6 +91,15 @@ enum SettingsControlTests {
         precondition(SettingsBoard.defaultValue("trayIconSize") == 100)
         precondition(SettingsBoard.defaultValue("dropAreaWidth") == 16)
         precondition(SettingsBoard.defaultValue("soundVolume") == 0.12)
+        precondition(SettingsBoard.defaultValue("activityChinHeight") == 40)
+        precondition(SettingsBoard.defaultValue("activityChinWidth") == 240)
+        precondition(SettingsBoard.defaultValue("activityOpenWidth") == 340)
+        precondition(SettingsBoard.defaultValue("activitySecondHeight") == 58)
+        precondition(SettingsBoard.fontScale(0.74) == 0.8)
+        precondition(SettingsBoard.fontScale(1.64) == 1.6)
+        precondition(SettingsBoard.fontScale(1.04) == 1.0)
+        precondition(SettingsBoard.fontScale(1.26) == 1.3)
+        precondition(SettingsBoard.fontScale(1) == 1)
         precondition(SettingsBoard.resetStatus == "Notch settings reset. API keys were kept.")
         precondition(SettingsBoard.resetClearsAPIKeys == false)
     }
@@ -96,6 +118,7 @@ enum SettingsControlTests {
         }
         precondition(SettingsBoard.defaultToggle("hudReplacement") == false)
         precondition(SettingsBoard.defaultToggle("showSongChange") == false)
+        precondition(SettingsBoard.defaultToggle("chinEnabled") == true)
         precondition(SettingsBoard.defaultToggle("liveActivitiesEnabled") == true)
         precondition(SettingsBoard.defaultToggle("not-a-toggle") == nil)
 
@@ -268,6 +291,54 @@ enum SettingsControlTests {
         precondition(SettingsBoard.showAccessibilitySettings(hudOn: true, keysCaptured: false, accessibilityOff: false) == false)
         precondition(SettingsBoard.showAccessibilitySettings(hudOn: false, keysCaptured: false, accessibilityOff: true) == false)
         precondition(SettingsBoard.showAccessibilitySettings(hudOn: true, keysCaptured: true, accessibilityOff: true) == false)
+    }
+
+    /// Settings font changes the settings page. Font size still changes the notch.
+    /// The production change that fails this: the settings scale landing on the activity line.
+    static func testSettingsFontStaysOnTheSettingsPage() {
+        let shell = sourceSlice(
+            file: "NotchBuddy/Sources/App/CoucouSettingsShell.swift",
+            from: "private var fontSizeControl",
+            until: "private var tabBar"
+        )
+        precondition(shell.contains("Text(\"Font size\")"), "Font size is still on the page")
+        precondition(shell.contains("stepFont(-0.1)"), "Font size still steps the shared scale")
+        precondition(shell.contains("Text(\"Settings font\")"), "Settings font is the second adjuster")
+        precondition(shell.contains("stepSettings(-0.1)"), "Settings font has its own step")
+        precondition(shell.contains("Only the settings page"), "the new control says it is settings only")
+        let face = sourceSlice(
+            file: "NotchBuddy/Sources/App/CoucouSettingsShell.swift",
+            from: "private struct CoucouFace",
+            until: "extension View"
+        )
+        precondition(face.contains("guard settingsPage"), "settings scale applies only on the settings page")
+        precondition(face.contains("prefs.coucouFontScale"))
+        precondition(face.contains("prefs.settingsFontScale"))
+        let box = sourceSlice(
+            file: "NotchBuddy/Sources/App/CoucouSettingsShell.swift",
+            from: "func coucouBox",
+            until: "func settingsBox"
+        )
+        precondition(box.contains("coucouFontScale"))
+        precondition(!box.contains("settingsFontScale"), "the notch frame ignores Settings font")
+        for file in [
+            "NotchBuddy/Sources/App/IslandRootView.swift",
+            "NotchBuddy/Sources/App/NookIslandView.swift",
+            "NotchBuddy/Sources/App/IslandViewContent.swift",
+            "NotchBuddy/Sources/App/IslandWindowController.swift",
+        ] {
+            let text = try! String(contentsOfFile: file, encoding: .utf8)
+            precondition(!text.contains("settingsFontScale"), "\(file) follows Settings font")
+        }
+        let prefs = sourceSlice(
+            file: "NotchBuddy/Sources/App/NookPreferences.swift",
+            from: "if defaults.object(forKey: key(\"settingsFontScale\"))",
+            until: "loadBool(\"hudReplacement\""
+        )
+        precondition(prefs.contains("object(forKey: key(\"settingsFontScale\"))"),
+                     "a missing settings font key stays at 1")
+        precondition(!prefs.contains("loadDouble(\"settingsFontScale\""),
+                     "settings font is not stored as a slider")
     }
 
     /// Volume and brightness stay off until the switch is turned on.

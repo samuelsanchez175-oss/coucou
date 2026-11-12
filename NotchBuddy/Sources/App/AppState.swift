@@ -347,6 +347,20 @@ final class AppState: ObservableObject {
         didSet { UserDefaults.standard.set(islandDisplay.storageValue, forKey: "islandDisplay") }
     }
 
+    /// Other screens that show Coucou while the main display stays on.
+    @Published var extraDisplays: Set<String> = [] {
+        didSet { UserDefaults.standard.set(IslandExtraDisplays.storageValue(extraDisplays), forKey: "islandExtraDisplays") }
+    }
+
+    /// The built-in notch. Off leaves Coucou on the other screens only.
+    @Published var showOnMainDisplay: Bool = true {
+        didSet { UserDefaults.standard.set(showOnMainDisplay, forKey: "islandShowMain") }
+    }
+
+    func setExtraDisplay(_ uuid: String, on: Bool) {
+        if on { extraDisplays.insert(uuid) } else { extraDisplays.remove(uuid) }
+    }
+
     // Vercel project filter — empty = watch all projects
     @Published var vercelProjectFilter: Set<String> = [] {
         didSet {
@@ -571,6 +585,15 @@ final class AppState: ObservableObject {
         if let v = ud.object(forKey: "hotkeyFlags")   as? Int   { hotkeyFlags = UInt(v) }
         if let v = ud.object(forKey: "hotkeyCode")    as? Int   { hotkeyCode = UInt16(v) }
         if let v = ud.string(forKey: "islandDisplay") { islandDisplay = IslandDisplayChoice(storageValue: v) }
+        extraDisplays = IslandExtraDisplays.parse(ud.string(forKey: "islandExtraDisplays"))
+        if ud.object(forKey: "islandShowMain") != nil {
+            showOnMainDisplay = ud.bool(forKey: "islandShowMain")
+        }
+        // A saved single-screen choice does not move the built-in panel. The Display switch hides it.
+        if islandDisplay != .notch {
+            islandDisplay = .notch
+            ud.set(IslandDisplayChoice.notch.storageValue, forKey: "islandDisplay")
+        }
         if let d = ud.data(forKey: "vercelProjectFilter"),
            let a = try? JSONDecoder().decode([String].self, from: d) { vercelProjectFilter = Set(a) }
         if let d = ud.data(forKey: "n8nWorkflowFilter"),

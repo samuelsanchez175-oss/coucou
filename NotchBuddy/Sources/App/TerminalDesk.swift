@@ -468,6 +468,7 @@ final class TerminalDesk: ObservableObject {
     }
 
     func send() {
+        guard TerminalBehavior.canSendToTerminal(accessibilityOff: accessibilityOff) else { return }
         guard let slot = selected else { return }
         let text = draft
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
@@ -668,7 +669,7 @@ final class TerminalDesk: ObservableObject {
             let title = TerminalBehavior.adoptedName(windowTitle: found.title, fallback: slot.name)
             nextTitles[slot.id] = title
             let ttyName = (found.tty as NSString).lastPathComponent
-            let noun = TerminalBehavior.shortTitle(found.title, fallback: "")
+            let noun = TerminalBehavior.lockedPhrase(windowTitle: found.title)
             let restingName = Self.palette.first { $0.id == slots[index].id }?.name ?? ""
             let userNamed = slots[index].name != restingName
             let locked = TerminalBehavior.lockNoun(

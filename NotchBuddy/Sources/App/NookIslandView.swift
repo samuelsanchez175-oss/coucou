@@ -94,6 +94,10 @@ struct TrayView: View {
 struct NotchMediaShelf: View {
     var islandWidth: CGFloat
     var contentCenterY: CGFloat
+    /// Set on a display with no camera, so the bars sit left of the corner.
+    var centerX: CGFloat? = nil
+    /// Shrinks with a short second-display bar. 1 keeps the full bars.
+    var fit: CGFloat = 1
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { _ in
@@ -106,13 +110,14 @@ struct NotchMediaShelf: View {
                 }
             }
             .frame(width: NookPlayback.shelfContentWidth, height: 16)
+            .scaleEffect(fit, anchor: .center)
             .accessibilityLabel("Video playing")
             .help("Video is playing")
         }
         .onAppear { PlaybackWave.shared.start() }
         .onDisappear { PlaybackWave.shared.stop() }
         .position(
-            x: NookPlayback.mediaShelfCenterX(islandWidth: islandWidth, wing: NookPlayback.mediaWing),
+            x: centerX ?? NookPlayback.mediaShelfCenterX(islandWidth: islandWidth, wing: NookPlayback.mediaWing),
             y: contentCenterY
         )
     }
@@ -120,6 +125,8 @@ struct NotchMediaShelf: View {
 
 struct LiveActivityPill: View {
     let headline: NookHeadline
+    /// 1 on the main display. A short second-display bar shrinks the line with the other marks.
+    var fit: CGFloat = 1
     @ObservedObject private var prefs = NookPreferences.shared
 
     /// The tray keeps its icon and shows the count. Other lines keep their sentence.
@@ -143,12 +150,18 @@ struct LiveActivityPill: View {
     }
 
     private var row: some View {
-        HStack(spacing: 4) {
+        let size = CoucouType.points(13, scale: prefs.coucouFontScale) * fit
+        return HStack(spacing: 4 * fit) {
             Image(systemName: headline.symbol)
             Text(shown)
                 .lineLimit(1)
+                .minimumScaleFactor(0.6)
         }
-        .font(.system(size: 12, weight: .semibold, design: .rounded))
+        .font(.system(size: size, weight: .semibold, design: .rounded))
+        .lineLimit(1)
+        .minimumScaleFactor(0.6)
+        .frame(maxWidth: .infinity, alignment: .center)
+        .frame(minHeight: size + 8 * fit)
         .foregroundStyle(Color(hex: "#F5F6F8"))
     }
 }
@@ -1582,13 +1595,13 @@ private struct NookTrayPage: View {
     private func songFact(_ value: String, _ label: String, colorHex: String? = nil) -> some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(value)
-                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                .coucouFont(17, weight: .semibold, design: .rounded)
                 .monospacedDigit()
                 .foregroundStyle(colorHex.map { Color(hex: $0) } ?? .white)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
             Text(label)
-                .font(.system(size: 11))
+                .coucouFont(11)
                 .foregroundStyle(Color.white.opacity(0.62))
         }
     }
@@ -1600,13 +1613,13 @@ private struct NookTrayPage: View {
                 HStack(spacing: 6) {
                     ForEach(Array(notes.enumerated()), id: \.offset) { _, note in
                         Text(note)
-                            .font(.system(size: 17, weight: .semibold, design: .rounded))
+                            .coucouFont(17, weight: .semibold, design: .rounded)
                             .foregroundStyle(Color(hex: SongFacts.noteColorHex(note)))
                             .lineLimit(1)
                     }
                 }
                 Text("Scale")
-                    .font(.system(size: 11))
+                    .coucouFont(11)
                     .foregroundStyle(Color.white.opacity(0.62))
             }
         }

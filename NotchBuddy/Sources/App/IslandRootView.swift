@@ -26,9 +26,22 @@ struct IslandRootView: View {
 
 // MARK: - Island container
 
+private struct PhysicalNotchKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
+extension EnvironmentValues {
+    /// True on the MacBook display. A second display is false, so its activity stays in the bar.
+    var coucouPhysicalNotch: Bool {
+        get { self[PhysicalNotchKey.self] }
+        set { self[PhysicalNotchKey.self] = newValue }
+    }
+}
+
 struct IslandContainer: View {
     @ObservedObject var state: AppState
     @ObservedObject private var prefs = NookPreferences.shared
+    @Environment(\.coucouPhysicalNotch) private var physicalNotch
     @ObservedObject private var board = NookBoard.shared
     @ObservedObject private var hud = HudController.shared
 
@@ -69,7 +82,10 @@ struct IslandContainer: View {
         let greetingActive = state.mode == .expanded && state.view == .greeting
         let nookActive = state.mode == .expanded && (state.view == .nook || state.view == .tray)
         let clearance = NotchClearance(occludedHeight: state.hasNotch ? state.notchHeight : 0)
-        let earY = clearance.earCenterY(fallback: islandHeight)
+        let housingY = clearance.earCenterY(fallback: islandHeight)
+        // A second display has no camera. The cluster sits in the middle of that bar,
+        // even when the bar is shorter than the MacBook housing.
+        let earY = physicalNotch ? housingY : liveHeight / 2
         let dropY = clearance.readableCenterY(fallback: islandHeight)
         let showMedia = NookPlayback.showsWaveOnClosedNotch(
             bundleID: board.mediaBundleID,
@@ -104,9 +120,10 @@ struct IslandContainer: View {
     ) -> some View {
         ZStack(alignment: .topLeading) {
             // Black island shape. The open notch covers the menu bar, and the buttons sit on that black.
-            IslandShape(width: islandWidth, height: islandHeight,
+            IslandShape(width: liveWidth, height: liveHeight,
                         cornerRadius: cornerRadius, topRadius: islandTopRadius)
                 .fill(prefs.translucentNotch ? Color.black.opacity(0.62) : Color.black)
+                .frame(width: liveWidth, height: liveHeight, alignment: .topLeading)
 
             // Content is laid out at the settled size, then scaled into the growing shape.
             expandedPage(uploadActive: uploadActive, clearance: clearance)
@@ -114,7 +131,7 @@ struct IslandContainer: View {
             // Single BotPlacement — always alive in the view tree so spring animations
             // fire from the current position (e.g. choose at 60,101) when canvas deactivates.
             // Hidden during upload canvas or greeting (both draw their own Mochi).
-            restingBot(uploadActive: uploadActive, greetingActive: greetingActive, nookActive: nookActive)
+            restingBot(uploadActive: uploadActive, greetingActive: greetingActive, nookActive: nookActive, earY: earY)
 
             CountdownBar(state: state, islandW: islandWidth)
 
@@ -135,12 +152,13 @@ struct IslandContainer: View {
         }
     }
 
-    private func restingBot(uploadActive: Bool, greetingActive: Bool, nookActive: Bool) -> some View {
-        BotPlacement(state: state, islandW: islandWidth, islandH: islandHeight,
-                     sideWing: state.mode == .expanded ? 0 : board.restingExtra)
+    private func restingBot(uploadActive: Bool, greetingActive: Bool, nookActive: Bool, earY: CGFloat) -> some View {
+        BotPlacement(state: state, islandW: state.mode == .expanded ? islandWidth : liveWidth, islandH: closedBotHeight,
+                     sideWing: state.mode == .expanded ? 0 : board.restingExtra,
+                     plainCenterY: physicalNotch ? nil : earY)
             .mask(alignment: .topLeading) {
                 Rectangle().frame(width: islandWidth,
-                                  height: state.mode == .expanded ? IslandConst.panelHeight : islandHeight)
+                                  height: state.mode == .expanded ? IslandConst.panelHeight : (physicalNotch ? islandHeight : max(islandHeight, liveHeight)))
             }
             .opacity(uploadActive || greetingActive || nookActive ? 0 : 1)
             .animation(.easeInOut(duration: 0.25), value: uploadActive || greetingActive || nookActive)
@@ -149,13 +167,21 @@ struct IslandContainer: View {
     @ViewBuilder
     private func closedFaces(earY: CGFloat, earHeight: CGFloat) -> some View {
         if state.mode != .expanded {
-            let blobs = TerminalBehavior.collapsedBlobCenters(
-                islandWidth: islandWidth,
-                notchWidth: state.notchWidth
-            )
+            let blobs = physicalNotch
+                ? TerminalBehavior.collapsedBlobCenters(
+                    islandWidth: liveWidth,
+                    notchWidth: state.notchWidth
+                )
+                : TerminalBehavior.CollapsedBlobCenters(
+                    whiteX: ActivityChin.plainMochiCenter(width: liveWidth),
+                    facesX: ActivityChin.plainFaceCenter(width: liveWidth)
+                )
+            let faceScale = physicalNotch
+                ? IslandRestingLayout(width: islandWidth, height: earHeight).miniGridScale
+                : closedMarkScale
             ZStack(alignment: .topLeading) {
                 CompactTerminalFaces()
-                    .scaleEffect(IslandRestingLayout(width: islandWidth, height: earHeight).miniGridScale)
+                    .scaleEffect(faceScale)
                     .position(x: blobs.facesX, y: earY)
                     .transition(.opacity)
                 if board.lampMarked {
@@ -167,13 +193,13 @@ struct IslandContainer: View {
                     ClosedNookLamp(centerX: lampX, centerY: earY, hint: board.lampHint)
                 }
             }
-            .frame(width: islandWidth, height: islandHeight, alignment: .topLeading)
+            .frame(width: liveWidth, height: liveHeight, alignment: .topLeading)
         }
     }
 
     private func watchIsland<Content: View>(_ content: Content) -> some View {
         content
-        .frame(width: islandWidth, height: islandHeight, alignment: .topLeading)
+        .frame(width: liveWidth, height: liveHeight, alignment: .topLeading)
         .coordinateSpace(name: "coucouDrawer")
         .onChange(of: state.mode) { oldMode, newMode in
             if newMode == .expanded {
@@ -233,6 +259,14 @@ struct IslandContainer: View {
         .onChange(of: board.trayWing) { _, _ in fitIsland() }
         .onChange(of: state.notchWidth) { _, _ in fitIsland() }
         .onChange(of: state.notchHeight) { _, _ in fitIsland() }
+        .onChange(of: prefs.chinEnabled) { _, _ in fitIsland() }
+        .onChange(of: prefs.activityChinHeight) { _, _ in fitIsland() }
+        .onChange(of: prefs.activityChinWidth) { _, _ in fitIsland() }
+        .onChange(of: prefs.activityOpenWidth) { _, _ in fitIsland() }
+        .onChange(of: prefs.activitySecondHeight) { _, _ in fitIsland() }
+        .onChange(of: prefs.coucouFontScale) { _, _ in fitIsland() }
+        .onChange(of: board.headline) { _, _ in fitIsland() }
+        .onChange(of: board.mainChinFolded) { _, _ in fitIsland() }
         .onChange(of: prefs.widgets) { _, _ in fitIsland() }
         .onChange(of: prefs.widgetDividers) { _, _ in fitIsland() }
         .onChange(of: prefs.contentPadding) { _, _ in fitIsland() }
@@ -263,9 +297,7 @@ struct IslandContainer: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .islandScreenChanged)) { _ in
             // New screen, new resting size (notch ↔ bar): snap without animation.
-            let (w, h) = islandSize(mode: state.mode, view: state.view,
-                                    progress: state.uploadProgress,
-                                    nw: state.notchWidth, nh: state.notchHeight)
+            let (w, h) = displayedSize(mode: state.mode, view: state.view)
             islandWidth  = w
             islandHeight = (state.mode == .expanded && state.view == .prompt) ? chatPromptHeight : h
         }
@@ -341,9 +373,11 @@ struct IslandContainer: View {
                 if kind != .faces {
                     NotchMediaShelf(
                         islandWidth: islandWidth,
-                        contentCenterY: earY
+                        contentCenterY: earY,
+                        centerX: physicalNotch ? nil : ActivityChin.plainWaveCenter(width: liveWidth),
+                        fit: physicalNotch ? 1 : closedMarkScale
                     )
-                    .frame(width: islandWidth, height: islandHeight)
+                    .frame(width: liveWidth, height: liveHeight)
                 }
             }
 
@@ -351,44 +385,43 @@ struct IslandContainer: View {
                 closedNoticePill(edge, earY: earY)
             }
         }
-        .frame(width: islandWidth, height: islandHeight, alignment: .topLeading)
+        .frame(width: liveWidth, height: liveHeight, alignment: .topLeading)
     }
 
     @ViewBuilder
     private func closedNoticePill(_ edge: NookHeadline, earY: CGFloat) -> some View {
         ZStack(alignment: .topLeading) {
             if edge.id == "tray", board.trayWing > 0 {
-            LiveActivityPill(headline: edge)
-                .frame(maxWidth: max(24, board.trayWing - 8))
-                .position(
-                    x: NookLayout.trayPillCenterX(side: board.trayWing),
-                    y: NookLayout.collapsedAnchorY(housingCenter: earY)
-                )
-        } else if edge.id == "media", state.hasNotch {
-            let placed = NookPlayback.mediaTitlePlacement(
-                islandWidth: islandWidth,
-                notchWidth: state.notchWidth
-            )
-            if placed.maxWidth > 0 {
                 LiveActivityPill(headline: edge)
-                    .frame(width: placed.maxWidth, alignment: .leading)
-                    .clipped()
+                    .frame(maxWidth: max(24, board.trayWing - 8))
                     .position(
-                        x: placed.centerX,
+                        x: NookLayout.trayPillCenterX(side: board.trayWing),
                         y: NookLayout.collapsedAnchorY(housingCenter: earY)
                     )
             }
-        } else if edge.id != "tray" {
             let inNotch = board.restingExtra <= 0
-            LiveActivityPill(headline: edge)
-                .frame(maxWidth: inNotch ? max(40, islandWidth - 28) : max(80, board.restingExtra - 16))
-                .position(
-                    x: inNotch ? islandWidth / 2 : islandWidth - board.restingExtra / 2,
-                    y: NookLayout.collapsedAnchorY(housingCenter: earY)
-                )
+            let chinFolded = !ActivityChin.shown(
+                enabled: prefs.chinEnabled,
+                physicalNotch: physicalNotch,
+                folded: board.mainChinFolded
+            )
+            if edge.id != "tray", edge.id != "drop", inNotch, !chinFolded {
+                let chin = activityChin(showing: true)
+                LiveActivityPill(headline: edge, fit: closedMarkScale)
+                    .frame(width: chin.activityWidth, alignment: .center)
+                    .position(
+                        x: liveWidth / 2,
+                        y: chin.activityCenterY(fallback: liveHeight, drawnHeight: liveHeight)
+                    )
+            } else if edge.id != "tray" {
+                LiveActivityPill(headline: edge)
+                    .position(
+                        x: liveWidth / 2,
+                        y: NookLayout.collapsedAnchorY(housingCenter: earY)
+                    )
             }
         }
-        .frame(width: islandWidth, height: islandHeight, alignment: .topLeading)
+        .frame(width: liveWidth, height: liveHeight, alignment: .topLeading)
     }
 
     /// Volume and brightness strip. It takes the wing while it is on screen.
@@ -466,11 +499,59 @@ struct IslandContainer: View {
         return board.headline
     }
 
+    /// Mochi stays in the camera ears. The chin below is for the activity line.
+    private var closedBotHeight: CGFloat {
+        guard state.mode != .expanded, physicalNotch else { return islandHeight }
+        return state.notchHeight
+    }
+
+    private func activityChin(showing: Bool) -> ActivityChin {
+        ActivityChin(
+            physicalNotch: physicalNotch,
+            housingHeight: state.notchHeight,
+            chinHeight: CGFloat(prefs.activityChinHeight),
+            chinWidth: CGFloat(prefs.activityChinWidth),
+            openWidth: CGFloat(prefs.activityOpenWidth),
+            barHeight: CGFloat(prefs.activitySecondHeight),
+            fontSize: CoucouType.points(13, scale: prefs.coucouFontScale),
+            showing: showing
+        )
+    }
+
+    /// The shape on screen is the island spring. A max() against the settled chin popped a growing bar.
+    private var liveWidth: CGFloat {
+        islandWidth
+    }
+
+    private var liveHeight: CGFloat {
+        return islandHeight
+    }
+
+    /// Faces, the line, and the waveform on a display with no camera follow the bar on screen.
+    private var closedMarkScale: CGFloat {
+        guard !physicalNotch else { return 1 }
+        return ActivityChin.contentScale(barHeight: max(1, liveHeight))
+    }
+
     private func displayedSize(mode: IslandMode, view: IslandView) -> (CGFloat, CGFloat) {
-        let (w, h) = islandSize(mode: mode, view: view,
+        var (w, h) = islandSize(mode: mode, view: view,
                                 progress: state.uploadProgress,
                                 nw: state.notchWidth, nh: state.notchHeight,
                                 hasNotch: state.hasNotch)
+        if mode != .expanded && prefs.chinEnabled {
+            let dropChin = board.headline != nil && !hud.visible && board.headline?.id != "tray"
+                && ActivityChin.shown(
+                    enabled: true,
+                    physicalNotch: physicalNotch,
+                    folded: board.mainChinFolded
+                )
+            let chin = activityChin(showing: dropChin)
+            w = max(w, chin.widthFloor)
+            h = chin.restingHeight(fallback: h)
+            if !physicalNotch {
+                h = max(chin.lineBox, CGFloat(prefs.activitySecondHeight))
+            }
+        }
         if mode == .expanded && view == .prompt {
             let occluded = state.hasNotch ? state.notchHeight : 0
             let h = TerminalBehavior.expandedDrawerHeight(
@@ -573,17 +654,28 @@ struct IslandShape: Shape {
 struct BotPlacement: View {
     @ObservedObject var state: AppState
     @ObservedObject private var board = NookBoard.shared
+    @Environment(\.coucouPhysicalNotch) private var physicalNotch
     let islandW: CGFloat
     let islandH: CGFloat
     var sideWing: CGFloat = 0
+    /// Set on a display with no camera, so Mochi sits in the bar with the faces.
+    var plainCenterY: CGFloat? = nil
 
     var body: some View {
         let (cx, cy, diameter, opacity) = botPosition(
             mode: state.mode, view: state.view, islandW: islandW, islandH: islandH,
             uploadProgress: state.uploadProgress, hasNotch: state.hasNotch,
             occludedHeight: state.hasNotch ? state.notchHeight : 0,
-            sideWing: sideWing, notchWidth: state.notchWidth)
-        let canvasSize = diameter / 0.6
+            sideWing: sideWing,
+            notchWidth: physicalNotch ? state.notchWidth : max(1, islandW - 1))
+        let onPlainBar = plainCenterY != nil && state.mode != .expanded
+        let drawX = onPlainBar ? ActivityChin.plainMochiCenter(width: islandW) : cx
+        let drawY = onPlainBar ? (plainCenterY ?? cy) : cy
+        let expandedDiameter = IslandConst.viewLayouts[state.view]?.botDiameter ?? diameter
+        // A second display sizes Mochi from the bar on screen. His own spring lagged that bar.
+        let bodySize = physicalNotch ? diameter : secondDisplayBody(drawnHeight: islandH, expandedDiameter: expandedDiameter)
+        let canvasSize = bodySize / 0.6
+        let markMotion: Animation? = physicalNotch ? .spring(response: 0.5, dampingFraction: 0.72) : nil
         let overhang: CGFloat = 40
         let isUploading = state.view == .uploading
 
@@ -603,7 +695,7 @@ struct BotPlacement: View {
                     .frame(width: diameter * 2.2, height: diameter * 2.2)
                     .blur(radius: 6)
                     .opacity(botGlowOpacity(state.effectiveState))
-                    .position(x: cx, y: cy)
+                    .position(x: drawX, y: drawY)
                     .animation(.easeInOut(duration: 0.4), value: state.effectiveState)
             }
 
@@ -633,20 +725,20 @@ struct BotPlacement: View {
                 BotCanvasView(state: state, particleOverhang: overhang, paused: state.mochiOnDesktop)
                     .frame(width: canvasSize, height: canvasSize + overhang)
                     .opacity(state.isDraggingBot || state.mochiOnDesktop ? 0 : opacity)
-                    .position(x: cx, y: cy - overhang / 2)
-                    .animation(.spring(response: 0.5, dampingFraction: 0.72), value: cx)
-                    .animation(.spring(response: 0.5, dampingFraction: 0.72), value: cy)
-                    .animation(.spring(response: 0.5, dampingFraction: 0.72), value: canvasSize)
+                    .position(x: drawX, y: drawY - overhang / 2)
+                    .animation(.spring(response: 0.5, dampingFraction: 0.72), value: drawX)
+                    .animation(markMotion, value: drawY)
+                    .animation(markMotion, value: canvasSize)
                     .transition(.scale(scale: 0.01, anchor: .center).combined(with: .opacity))
                 if state.mode != .expanded, !state.mochiOnDesktop {
                     let pictureReady = board.mediaWing > 0 && (
                         board.artworkPath != nil
                             || FileManager.default.fileExists(atPath: "/tmp/coucou-now-playing.jpg")
                     )
-                    let fitted = NookPlayback.closedThumbCenterX(whiteX: cx, botDiameter: diameter)
-                    let beside = cx - diameter / 2 - 4 - NookPlayback.closedThumbWidth / 2
-                    if pictureReady, let thumbX = fitted ?? (beside > 8 ? beside : nil) {
-                        ClosedPlayingThumb(centerX: thumbX, centerY: cy)
+                    let thumb = NookPlayback.closedThumbCenterX(whiteX: drawX, botDiameter: bodySize)
+                    let beside = drawX - bodySize / 2 - 4 - NookPlayback.closedThumbWidth / 2
+                    if pictureReady, let thumbX = thumb ?? (beside > 8 ? beside : nil) {
+                        ClosedPlayingThumb(centerX: thumbX, centerY: drawY)
                     }
                 }
             }
@@ -657,6 +749,17 @@ struct BotPlacement: View {
         // Slap, drag, and hover are handled by the AppKit NSEvent monitor in
         // IslandWindowController — not SwiftUI gestures — so this is safe.
         .allowsHitTesting(false)
+    }
+
+    /// Mochi on a display with no camera. Size follows the bar that is on screen.
+    private func secondDisplayBody(drawnHeight: CGFloat, expandedDiameter: CGFloat) -> CGFloat {
+        let cap: CGFloat = 120
+        let fitted = min(max(1, drawnHeight), cap)
+        let fit = ActivityChin.contentScale(barHeight: fitted)
+        let small = min(20, max(0, fitted - 6)) * fit
+        let big = max(small, expandedDiameter)
+        let travel = min(1, max(0, (drawnHeight - cap) / 80))
+        return small + (big - small) * travel
     }
 
     private func botGlowColor(_ s: BotState) -> Color {
@@ -1115,11 +1218,12 @@ private struct UpdatePromptCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(prompt.title)
-                .font(.system(size: 13, weight: .semibold))
+                .coucouFont(13, weight: .semibold)
                 .foregroundColor(Color(hex: "#F5F6F8"))
+                .fixedSize(horizontal: false, vertical: true)
             if !prompt.detail.isEmpty {
                 Text(prompt.detail)
-                    .font(.system(size: 11))
+                    .coucouFont(11)
                     .foregroundColor(Color(hex: "#8E939C"))
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1136,7 +1240,7 @@ private struct UpdatePromptCard: View {
             }
         }
         .padding(14)
-        .frame(maxWidth: 280, alignment: .leading)
+        .frame(maxWidth: max(280, coucouBox(280)), alignment: .leading)
         .background(Color(hex: "#1D1F23"))
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }

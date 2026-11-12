@@ -254,6 +254,32 @@ enum NookLayoutTests {
         precondition(NookLayout.keepsTrayLineAwake(headlineID: "tray"))
         precondition(!NookLayout.keepsTrayLineAwake(headlineID: "battery"))
         precondition(!NookLayout.keepsTrayLineAwake(headlineID: nil))
+        precondition(NookLayout.mainChinLifetime == 7, "the main-display chin folds after 7 seconds")
+        precondition(NookLayout.restartsMainChinClock(previousID: nil, previousText: nil, nextID: "calendar", nextText: "Game"))
+        precondition(!NookLayout.restartsMainChinClock(
+            previousID: "calendar", previousText: "Game", nextID: "calendar", nextText: "Game"
+        ))
+        precondition(!NookLayout.restartsMainChinClock(
+            previousID: "battery", previousText: "80% 14W", nextID: "battery", nextText: "80% 20W"
+        ), "a watt change must not keep the chin up")
+        precondition(NookLayout.restartsMainChinClock(
+            previousID: "media", previousText: "A", nextID: "media", nextText: "B"
+        ), "a new song starts the chin again")
+        precondition(NookLayout.restartsMainChinClock(
+            previousID: "calendar", previousText: "Game", nextID: "media", nextText: "Song"
+        ))
+        let chinFrame = sourceSlice(
+            file: "NotchBuddy/Sources/App/IslandWindowController.swift",
+            from: "private func activityFrame",
+            until: "private func pointerHits"
+        )
+        precondition(chinFrame.contains("mainChinFolded"), "a folded chin no longer takes the click")
+        precondition(chinFrame.contains("physicalNotch"), "only the main display folds that chin")
+        let chinDraw = try! String(contentsOfFile: "NotchBuddy/Sources/App/IslandRootView.swift", encoding: .utf8)
+        precondition(chinDraw.contains("mainChinFolded"), "the main display drops the chin after 7 seconds")
+        let chinClock = try! String(contentsOfFile: "NotchBuddy/Sources/App/NookBoard.swift", encoding: .utf8)
+        precondition(chinClock.contains("mainChinLifetime"), "the chin hides on a 7 second clock")
+        precondition(chinClock.contains("considerMainChin"), "the chin clock runs when the line is published")
 
         let size = sourceSlice(
             file: "NotchBuddy/Sources/App/IslandWindowController.swift",
@@ -317,8 +343,14 @@ enum NookLayoutTests {
             from: "// Black island shape",
             until: "Content is laid out"
         )
-        precondition(shape.contains("height: islandHeight"), "the open notch is black through the menu bar")
+        precondition(shape.contains("height: liveHeight"), "the black shape follows the chin under the camera")
         precondition(!shape.contains(".offset(y: menuBarBand)"), "the orange menu bar does not show through the notch")
+        let live = sourceSlice(
+            file: "NotchBuddy/Sources/App/IslandRootView.swift",
+            from: "private var liveHeight",
+            until: "private func displayedSize"
+        )
+        precondition(live.contains("return islandHeight"), "the open notch is black through the menu bar")
         let header = sourceSlice(
             file: "NotchBuddy/Sources/App/IslandRootView.swift",
             from: "let wings = TerminalBehavior.menuBarWings",
@@ -658,7 +690,7 @@ enum NookLayoutTests {
         )
         precondition(result.contains("songFacts"), "the plus song info shows the readout")
         precondition(
-            result.contains(".system(size: 17, weight: .semibold, design: .rounded)"),
+            result.contains(".coucouFont(17, weight: .semibold, design: .rounded)"),
             "the plus song info uses the same rounded fact font as Settings"
         )
         precondition(result.contains("\"Scale\""), "the plus song info shows the scale")
@@ -669,7 +701,7 @@ enum NookLayoutTests {
             from: "private func readoutStrip",
             until: "private func registerTap"
         )
-        precondition(settingsFact.contains(".system(size: 17, weight: .semibold, design: .rounded)"))
+        precondition(settingsFact.contains(".coucouFont(17, weight: .semibold, design: .rounded)"))
         precondition(settingsFact.contains("\"Scale\""), "settings song info shows the scale")
         precondition(settingsFact.contains("keyColorHex"), "the settings key uses its note color")
         precondition(settingsFact.contains("noteColorHex"), "each settings scale note uses its own color")
@@ -1048,7 +1080,7 @@ enum NookLayoutTests {
         precondition(settings.contains("Refresh list"))
         precondition(settings.contains("Select all"))
         precondition(settings.contains("Clear"))
-        precondition(settings.contains("size: 11"))
+        precondition(settings.contains("coucouFont(11, weight: .regular)"))
 
         let saved = sourceSlice(
             file: "NotchBuddy/Sources/App/NookPreferences.swift",
@@ -1169,7 +1201,7 @@ enum NookLayoutTests {
         precondition(settings.contains("Refresh list"))
         precondition(settings.contains("Select all"))
         precondition(settings.contains("Clear"))
-        precondition(settings.contains("size: 11"))
+        precondition(settings.contains("coucouFont(11, weight: .regular)"))
         precondition(!settings.contains("NSOpenPanel"))
         precondition(!settings.contains("NSSavePanel"))
 

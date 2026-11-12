@@ -361,6 +361,25 @@ struct OverviewView: View {
 /// Brand-colored rings under the white blob. Name, then the five-hour ring, then the week ring.
 struct UsageRingStack: View {
     @ObservedObject private var monitor = UsageMonitor.shared
+    @ObservedObject private var prefs = NookPreferences.shared
+    @State private var scroll = UsageScrollReading(offset: 0, content: 1, visible: 1)
+
+    /// Two clock lines at the settings face. Scale 1 stays the 22pt row.
+    private var faceRow: CGFloat {
+        let scale = CGFloat(CoucouType.clamp(prefs.coucouFontScale))
+        return UsageBehavior.row * scale + (scale > 1 ? 2 : 0)
+    }
+
+    private var faceHeader: CGFloat {
+        let scale = CGFloat(CoucouType.clamp(prefs.coucouFontScale))
+        return UsageBehavior.header * scale + (scale > 1 ? 2 : 0)
+    }
+
+    /// The face may shrink back to the old size so a wider word stays inside its column.
+    private var faceFloor: CGFloat {
+        let scale = CGFloat(CoucouType.clamp(prefs.coucouFontScale))
+        return min(1, 1 / scale)
+    }
 
     private var columns: [String] {
         UsageBehavior.columnWindows(UsageBehavior.services.flatMap {
@@ -384,12 +403,30 @@ struct UsageRingStack: View {
                             modelRow(item.row, service: item.service)
                         }
                     }
+                    .padding(.top, UsageBehavior.blobPad)
+                    .background(UsageScrollMark())
                 }
                 .contentMargins(0, for: .scrollContent)
                 .frame(
-                    height: UsageBehavior.rowListHeight(rowCount: listedRows.count, offered: geo.size.height),
+                    height: UsageBehavior.rowListHeight(
+                        rowCount: listedRows.count,
+                        offered: geo.size.height,
+                        row: faceRow
+                    ),
                     alignment: .top
                 )
+                .onScrollGeometryChange(for: UsageScrollReading.self) { geo in
+                    UsageScrollReading(
+                        offset: geo.visibleRect.minY,
+                        content: geo.contentSize.height,
+                        visible: geo.containerSize.height
+                    )
+                } action: { _, next in
+                    scroll = next
+                }
+                .overlay(alignment: .topTrailing) {
+                    UsageScrollIndicator(reading: scroll)
+                }
             }
         }
         .frame(width: UsageBehavior.stackWidth, alignment: .topLeading)
@@ -401,9 +438,9 @@ struct UsageRingStack: View {
         HStack(spacing: 2) {
             Circle().fill(Color(hex: service.brandHex)).frame(width: 6, height: 6)
             Text(row.model)
-                .font(.system(size: 11, weight: .semibold))
+                .coucouFont(11, weight: .semibold)
                 .foregroundStyle(Color(hex: "#F5F6F8"))
-                .lineLimit(1).minimumScaleFactor(0.8)
+                .lineLimit(1).minimumScaleFactor(faceFloor)
                 .frame(width: UsageBehavior.nameWidth, alignment: .leading)
             ForEach(columns, id: \.self) { window in
                 if let gate = UsageBehavior.placed(row: row, window: window) {
@@ -413,7 +450,7 @@ struct UsageRingStack: View {
                 }
             }
         }
-        .frame(width: UsageBehavior.stackWidth, height: UsageBehavior.row, alignment: .leading)
+        .frame(width: UsageBehavior.stackWidth, height: faceRow, alignment: .leading)
     }
 
     private var header: some View {
@@ -424,7 +461,7 @@ struct UsageRingStack: View {
                 caption(window)
             }
         }
-        .frame(height: UsageBehavior.header)
+        .frame(height: faceHeader)
     }
 
     /// The words sit over the ring and the percent. The date lane is the padding before the next clock.
@@ -433,10 +470,10 @@ struct UsageRingStack: View {
         let meter = min(UsageBehavior.meterWidth, width)
         return HStack(spacing: 0) {
             Text(window)
-                .font(.system(size: 10, weight: .medium))
+                .coucouFont(10, weight: .medium)
                 .foregroundStyle(Color(hex: "#A7ABB3"))
                 .lineLimit(1)
-                .minimumScaleFactor(0.85)
+                .minimumScaleFactor(faceFloor)
                 .multilineTextAlignment(.center)
                 .frame(width: meter, alignment: .center)
                 .offset(x: -UsageBehavior.headerNudge, y: -UsageBehavior.headerLift)
@@ -451,11 +488,11 @@ struct UsageRingStack: View {
             HStack(spacing: 4) {
                 UsageRing(remaining: gate.remaining, color: Color(hex: service.brandHex))
                 Text(UsageBehavior.number(gate.remaining))
-                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .coucouFont(10, weight: .semibold, design: .rounded)
                     .monospacedDigit()
                     .foregroundStyle(Color(hex: "#F5F6F8"))
                     .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+                    .minimumScaleFactor(faceFloor)
                     .frame(width: UsageBehavior.percentWidth, alignment: .leading)
                     .accessibilityHidden(true)
             }
@@ -484,12 +521,78 @@ struct UsageRingStack: View {
             Text(day)
             Text(time)
         }
-        .font(.system(size: 10, weight: .medium))
+        .coucouFont(10, weight: .medium)
         .foregroundStyle(Color(hex: "#A7ABB3"))
         .lineLimit(1)
-        .minimumScaleFactor(0.85)
+        .minimumScaleFactor(faceFloor)
         .padding(.leading, UsageBehavior.dateGap)
         .help(help)
+    }
+}
+
+/// Where the usage list is scrolled, and how tall the list and the window are.
+private struct UsageScrollReading: Equatable {
+    var offset: CGFloat
+    var content: CGFloat
+    var visible: CGFloat
+}
+
+/// A thin bar on the right of the usage rows. It stays up so the list shows that it scrolls.
+private struct UsageScrollIndicator: View {
+    var reading: UsageScrollReading
+
+    var body: some View {
+        let content = reading.content
+        let visible = reading.visible
+        let overflow = content - visible
+        if overflow > 1, visible > 8 {
+            let thumb = min(visible - 4, max(18, visible * visible / content))
+            let travel = max(0, visible - thumb)
+            let progress = min(1, max(0, reading.offset / overflow))
+            Capsule()
+                .fill(Color.white.opacity(0.55))
+                .frame(width: 4, height: thumb)
+                .offset(y: 2 + progress * travel)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                .padding(.trailing, 2)
+                .allowsHitTesting(false)
+        }
+    }
+}
+
+/// Tags the usage list's scroll view so a trackpad gesture scrolls the rows.
+private struct UsageScrollMark: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        view.identifier = NSUserInterfaceItemIdentifier(UsageBehavior.scrollMarker)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        nsView.identifier = NSUserInterfaceItemIdentifier(UsageBehavior.scrollMarker)
+        func tag(_ view: NSView?) {
+            var cursor = view
+            while let current = cursor {
+                if let scroll = current as? NSScrollView {
+                    scroll.identifier = NSUserInterfaceItemIdentifier(UsageBehavior.scrollMarker)
+                    return
+                }
+                cursor = current.superview
+            }
+        }
+        tag(nsView)
+        DispatchQueue.main.async {
+            tag(nsView)
+            guard let content = nsView.window?.contentView else { return }
+            func walk(_ view: NSView) {
+                if let scroll = view as? NSScrollView,
+                   abs(scroll.frame.width - UsageBehavior.stackWidth) < 4 {
+                    scroll.identifier = NSUserInterfaceItemIdentifier(UsageBehavior.scrollMarker)
+                }
+                view.subviews.forEach(walk)
+            }
+            walk(content)
+        }
     }
 }
 
@@ -601,13 +704,13 @@ struct EmptyStateView: View {
                 VStack(alignment: .leading, spacing: 5) {
                     Text("Nothing running right now.")
                         .font(.system(size: 15, weight: .semibold))
-                    Text("Drop a file or window, or ask me anything.")
+                    Text("Drop a file or window, or open Grok Bot.")
                         .font(.system(size: 13))
                         .foregroundColor(Color(hex: "#9398A1"))
                 }
                 Spacer()
-                PrimaryButton("Ask Claude") {
-                    state.view = .prompt
+                PrimaryButton("Open Grok Bot") {
+                    GrokBotApp.open()
                 }
             }
             .padding(.leading, 118)

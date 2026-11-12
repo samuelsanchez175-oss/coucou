@@ -100,10 +100,12 @@ enum LiveActivityTests {
         )
         precondition(shell.contains("Spacer(minLength: 0)"),
                      "a short page sits under the tab bar")
-        precondition(shell.contains("SettingsPage.columnWidth"),
-                     "settings sit in one centered column")
+        precondition(!shell.contains("SettingsPage.columnWidth"),
+                     "settings use the width of the window")
+        precondition(shell.contains("maxWidth: .infinity"),
+                     "settings use the width of the window")
         precondition(shell.contains("alignment: .top"),
-                     "the column stays under the tab bar, in the middle of the window")
+                     "the page stays under the tab bar")
         precondition(!shell.contains("alignment: .topLeading"),
                      "the page is not stuck to the left edge")
         precondition(shell.contains("contentShape(.interaction, RoundedRectangle(cornerRadius: 8))"),
@@ -263,7 +265,7 @@ enum LiveActivityTests {
         precondition(about.contains("Check for a newer version"))
         precondition(about.contains("Open the release page"))
         precondition(about.contains("Looks up the published Coucou release"))
-        precondition(about.contains("size: 11"))
+        precondition(about.contains("coucouFont(11)"))
         precondition(about.contains("updateSentence"))
 
         let pill = sourceSlice(
@@ -664,9 +666,14 @@ enum LiveActivityTests {
             from: "struct GeneralSettingsPane",
             until: "struct GestureSettingsPane"
         )
-        precondition(general.contains("Haptic feedback"), "settings has a haptic switch")
-        precondition(general.contains("nears the edge of the notch"), "the switch says what the click is for")
         precondition(general.contains("HStack(alignment: .top"), "the lower settings sit in two columns")
+        let gestures = sourceSlice(
+            file: "NotchBuddy/Sources/App/CoucouSettingsShell.swift",
+            from: "struct GestureSettingsPane",
+            until: "struct LiveActivitySettingsPane"
+        )
+        precondition(gestures.contains("Haptic feedback"), "settings has a haptic switch")
+        precondition(gestures.contains("nears the edge of the notch"), "the switch says what the click is for")
         let opener = sourceSlice(
             file: "NotchBuddy/Sources/App/AppDelegate.swift",
             from: "private func openSettings",
@@ -675,7 +682,7 @@ enum LiveActivityTests {
         precondition(!opener.contains("collapse()"), "opening settings must not fold the notch")
         let hover = sourceSlice(
             file: "NotchBuddy/Sources/App/IslandWindowController.swift",
-            from: "private func pollFrame",
+            from: "private func pointerHits",
             until: "private var lastMouse"
         )
         precondition(hover.contains("NotchHaptics.approach"), "the pointer tick uses the edge rule")
@@ -690,6 +697,15 @@ enum LiveActivityTests {
             until: "private func presentExpanded"
         )
         precondition(preview.contains("refreshChrome()"), "the drop wing and activity line resize as soon as that page opens")
+        precondition(preview.contains("chinPreview"), "the chin stays up while the Live Activities page is open")
+        precondition(preview.contains("presentCollapsedChin"), "the chin sliders show the collapsed notch")
+        precondition(NookLayout.chinPreviewHeadline(nil).text == "Live activity")
+        let game = NookHeadline(id: "calendar", text: "Game", symbol: "calendar")
+        precondition(NookLayout.chinPreviewHeadline(game) == game)
+        let tray = NookHeadline(id: "tray", text: "1 file in the tray", symbol: "tray.full")
+        precondition(NookLayout.chinPreviewHeadline(tray).id == "chin")
+        let drop = NookHeadline(id: "drop", text: "AirDrop", symbol: "square.and.arrow.up")
+        precondition(NookLayout.chinPreviewHeadline(drop).id == "chin")
         let board = sourceSlice(
             file: "NotchBuddy/Sources/App/NookBoard.swift",
             from: "func refreshChrome",

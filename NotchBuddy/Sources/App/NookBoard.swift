@@ -65,6 +65,10 @@ final class NookBoard: ObservableObject {
     @Published var songFacts: SongReadout?
     @Published var songFactsName = ""
     @Published var headline: NookHeadline?
+    /// Live Activities settings is open. The chin stays on the notch while those sliders move.
+    var chinPreview = false
+    /// The main-display chin has been up for 7 seconds. The line can stay on a display with no camera.
+    @Published var mainChinFolded = false
     @Published var restingExtra: CGFloat = 0
     /// Left-wing width for the tray count. Zero while that line is hidden.
     @Published var trayWing: CGFloat = 0
@@ -106,6 +110,9 @@ final class NookBoard: ObservableObject {
     private var pointerInside = false
     private var revealed = true
     private var lastInteraction = Date()
+    private var chinHideTask: Task<Void, Never>?
+    private var chinShownID: String?
+    private var chinShownText: String?
     private var lastCandidateKey = ""
     private var lastBluetoothKey: String?
     private var bluetoothIsNews = false
@@ -1215,8 +1222,12 @@ final class NookBoard: ObservableObject {
             }
         }
         let shown = activitiesShown(prefs) && revealed
-        let line = NookLayout.headline(facts: facts, enabled: enabled, revealed: shown)
+        var line = NookLayout.headline(facts: facts, enabled: enabled, revealed: shown)
+        if chinPreview {
+            line = NookLayout.chinPreviewHeadline(line)
+        }
         if line != headline { headline = line }
+        considerMainChin(line)
         refreshLamp(prefs)
         let extra: CGFloat
         if dropWing {
@@ -1263,7 +1274,50 @@ final class NookBoard: ObservableObject {
         publish()
     }
 
+    /// The dropped chin on the MacBook notch folds after 7 seconds, even if the pointer is still on it.
+    private func considerMainChin(_ line: NookHeadline?) {
+        if chinPreview {
+            chinHideTask?.cancel()
+            chinHideTask = nil
+            if mainChinFolded { mainChinFolded = false }
+            return
+        }
+        guard let line, line.id != "tray", line.id != "drop" else {
+            chinHideTask?.cancel()
+            chinHideTask = nil
+            chinShownID = nil
+            chinShownText = nil
+            if mainChinFolded { mainChinFolded = false }
+            return
+        }
+        let restart = NookLayout.restartsMainChinClock(
+            previousID: chinShownID,
+            previousText: chinShownText,
+            nextID: line.id,
+            nextText: line.text
+        )
+        chinShownID = line.id
+        chinShownText = line.text
+        if restart {
+            if mainChinFolded { mainChinFolded = false }
+            scheduleMainChinHide()
+        } else if chinHideTask == nil && !mainChinFolded {
+            scheduleMainChinHide()
+        }
+    }
+
+    private func scheduleMainChinHide() {
+        chinHideTask?.cancel()
+        let nanos = UInt64(NookLayout.mainChinLifetime * 1_000_000_000)
+        chinHideTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: nanos)
+            guard let self, !Task.isCancelled, !self.chinPreview else { return }
+            self.mainChinFolded = true
+        }
+    }
+
     private func considerHide(_ prefs: NookPreferences) {
+        if chinPreview { return }
         let timeout = prefs.inactivityTimeout
         guard timeout > 0, !pointerInside else { return }
         guard Date().timeIntervalSince(lastInteraction) > timeout else { return }

@@ -93,14 +93,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             placeBelowIsland(w)
             w.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); return
         }
-        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 860, height: 640),
+        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1480, height: 900),
                            styleMask: [.titled, .closable, .miniaturizable, .resizable],
                            backing: .buffered, defer: false)
         win.title = "Settings — Coucou"
         let host = NSHostingView(rootView: CoucouSettingsShell())
         host.sizingOptions = [.minSize, .standardBounds]
         win.contentView = host
-        win.contentMinSize = NSSize(width: 720, height: 520)
+        win.contentMinSize = NSSize(width: 1080, height: 520)
+        win.contentMaxSize = NSSize(width: 4000, height: 3000)
+        win.setContentSize(NSSize(width: 1480, height: 900))
         win.isReleasedWhenClosed = false
         win.delegate = self
         placeBelowIsland(win)

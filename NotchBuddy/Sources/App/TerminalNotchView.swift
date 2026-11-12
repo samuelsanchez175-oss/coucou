@@ -29,6 +29,7 @@ struct TerminalClusterView: View {
                         text: $desk.draft,
                         ghost: desk.ghost,
                         placeholder: placeholder,
+                        acceptsText: TerminalBehavior.canSendToTerminal(accessibilityOff: desk.accessibilityOff),
                         onSubmit: { desk.send() },
                         onAcceptWord: { desk.acceptNextWord() },
                         onAcceptAll: { desk.acceptAll() },
@@ -66,8 +67,12 @@ struct TerminalClusterView: View {
     }
 
     private var placeholder: String {
-        let name = desk.selected.map { desk.displayName($0.id) } ?? "Terminal 1"
-        return "Write to \(TerminalBehavior.shortTitle(name, fallback: "Terminal"))"
+        let slot = desk.selected
+        let resting = slot.flatMap { item in TerminalDesk.palette.first { $0.id == item.id }?.name } ?? "Terminal"
+        let face = slot.map {
+            TerminalBehavior.faceLabel(slotID: $0.id, savedName: $0.name, restingName: resting)
+        } ?? "Terminal"
+        return TerminalBehavior.promptPlaceholder(accessibilityOff: desk.accessibilityOff, faceName: face)
     }
 }
 
@@ -380,77 +385,23 @@ struct TerminalSettingsSection: View {
                 statusLight(.working, "New response")
                 statusLight(.waiting, "Needs input")
             }
-            ForEach(desk.slots) { slot in
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 6) {
-                        Circle().fill(Color(hex: slot.color)).frame(width: 8, height: 8)
-                        TextField("Name before a window is open", text: nameBinding(slot.id))
-                            .textFieldStyle(.roundedBorder)
-                    }
-                    if let live = desk.titles[slot.id], !live.isEmpty {
-                        Text("Window name: \(live)")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    HStack(spacing: 6) {
-                        TextField("Starting folder", text: folderBinding(slot.id))
-                            .textFieldStyle(.roundedBorder)
-                        Button("Choose Folder") { desk.chooseFolder(slot.id) }
-                    }
-                    Picker("AI", selection: assistantBinding(slot.id)) {
-                        Text("Claude").tag(TerminalBehavior.TerminalAssistant.claude.rawValue)
-                        Text("Grok").tag(TerminalBehavior.TerminalAssistant.grok.rawValue)
-                        Text("Codex").tag(TerminalBehavior.TerminalAssistant.codex.rawValue)
-                    }
-                    .pickerStyle(.segmented)
-                    .help("Opens this assistant the next time this color starts a window. The model is the one saved under Keys.")
-                    Text(TerminalBehavior.assistantDetail(
-                        slot.assistant,
-                        claudeModel: app.claudeModel,
-                        grokModel: app.grokModel
-                    ))
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    Picker("Open window", selection: windowBinding(slot.id)) {
-                        Text("New window").tag(0)
-                        ForEach(desk.openWindows, id: \.id) { window in
-                            Text(window.title.isEmpty ? "Terminal" : window.title).tag(window.id)
-                        }
-                    }
-                }
+            let slots = Array(desk.slots)
+            let mid = (slots.count + 1) / 2
+            HStack(alignment: .top, spacing: 16) {
+                slotColumn(Array(slots.prefix(mid)))
+                slotColumn(Array(slots.dropFirst(mid)))
             }
         }
         .onAppear { desk.start() }
     }
 
-    private func nameBinding(_ id: String) -> Binding<String> {
-        Binding(
-            get: { desk.slots.first { $0.id == id }?.name ?? "" },
-            set: { desk.setName(id, $0) }
-        )
-    }
-
-    private func folderBinding(_ id: String) -> Binding<String> {
-        Binding(
-            get: { desk.slots.first { $0.id == id }?.folder ?? "" },
-            set: { desk.setFolder(id, $0) }
-        )
-    }
-
-    private func windowBinding(_ id: String) -> Binding<Int> {
-        Binding(
-            get: { desk.slots.first { $0.id == id }?.windowID ?? 0 },
-            set: { desk.setWindow(id, $0 == 0 ? nil : $0) }
-        )
-    }
-
-    private func assistantBinding(_ id: String) -> Binding<String> {
-        Binding(
-            get: { TerminalBehavior.launchTool(desk.slots.first { $0.id == id }?.assistant ?? "grok") },
-            set: { desk.setAssistant(id, $0) }
-        )
+    private func slotColumn(_ slots: [TerminalSlot]) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            ForEach(slots) { slot in
+                TerminalSlotCard(slot: slot, desk: desk, app: app)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     private func statusLight(_ face: TerminalBehavior.Face, _ label: String) -> some View {
@@ -465,12 +416,102 @@ struct TerminalSettingsSection: View {
     }
 }
 
+/// One terminal in Settings. The title is the blob's short name. The window title stays in the menu.
+private struct TerminalSlotCard: View {
+    let slot: TerminalSlot
+    @ObservedObject var desk: TerminalDesk
+    @ObservedObject var app: AppState
+    @State private var showModel = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 8) {
+                Circle().fill(Color(hex: slot.color)).frame(width: 8, height: 8)
+                Text(blobLabel(slot, desk: desk))
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                assistantPicker
+            }
+            HStack(spacing: 8) {
+                TextField("Starting folder", text: folderBinding)
+                    .textFieldStyle(.roundedBorder)
+                Button("Choose Folder") { desk.chooseFolder(slot.id) }
+            }
+            Picker("Open window", selection: windowBinding) {
+                Text("New window").tag(0)
+                ForEach(desk.openWindows, id: \.id) { window in
+                    Text(window.title.isEmpty ? "Terminal" : window.title).tag(window.id)
+                }
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+        )
+    }
+
+    private var assistantPicker: some View {
+        VStack(alignment: .trailing, spacing: 4) {
+            Picker("AI", selection: assistantBinding) {
+                Text("Claude").tag(TerminalBehavior.TerminalAssistant.claude.rawValue)
+                Text("Grok").tag(TerminalBehavior.TerminalAssistant.grok.rawValue)
+                Text("Codex").tag(TerminalBehavior.TerminalAssistant.codex.rawValue)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize(horizontal: true, vertical: true)
+            .onHover { showModel = $0 }
+            if showModel {
+                Text(TerminalBehavior.assistantDetail(
+                    slot.assistant,
+                    claudeModel: app.claudeModel,
+                    grokModel: app.grokModel
+                ))
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            }
+        }
+    }
+
+    private var folderBinding: Binding<String> {
+        Binding(
+            get: { desk.slots.first { $0.id == slot.id }?.folder ?? "" },
+            set: { desk.setFolder(slot.id, $0) }
+        )
+    }
+
+    private var windowBinding: Binding<Int> {
+        Binding(
+            get: { desk.slots.first { $0.id == slot.id }?.windowID ?? 0 },
+            set: { desk.setWindow(slot.id, $0 == 0 ? nil : $0) }
+        )
+    }
+
+    private var assistantBinding: Binding<String> {
+        Binding(
+            get: { TerminalBehavior.launchTool(desk.slots.first { $0.id == slot.id }?.assistant ?? "grok") },
+            set: { desk.setAssistant(slot.id, $0) }
+        )
+    }
+}
+
 @MainActor
 private func blobLabel(_ slot: TerminalSlot, desk: TerminalDesk) -> String {
-    let raw = desk.displayName(slot.id)
-    let locked = !slot.lockedName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    if locked { return raw }
-    return TerminalBehavior.shortTitle(raw, fallback: slot.name)
+    let resting = TerminalDesk.palette.first { $0.id == slot.id }?.name ?? "Terminal"
+    let typed = slot.name.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !typed.isEmpty, typed != resting {
+        return TerminalBehavior.faceLabel(slotID: slot.id, savedName: slot.name, restingName: resting)
+    }
+    return TerminalBehavior.shownTerminalName(
+        locked: slot.lockedName,
+        windowTitle: desk.titles[slot.id] ?? "",
+        slotID: slot.id
+    )
 }
 
 @ViewBuilder
@@ -586,6 +627,7 @@ struct TerminalPromptField: NSViewRepresentable {
     @Binding var text: String
     var ghost: String
     var placeholder: String
+    var acceptsText: Bool = true
     var onSubmit: () -> Void
     var onAcceptWord: () -> Void
     var onAcceptAll: () -> Void
@@ -617,6 +659,8 @@ struct TerminalPromptField: NSViewRepresentable {
         }
         view.ghost = ghost
         view.placeholder = placeholder
+        view.isEditable = acceptsText
+        view.isSelectable = acceptsText
         view.needsDisplay = true
     }
 

@@ -58,10 +58,33 @@ enum IslandDisplayChoiceTests {
         let unnamed = [DisplaySettingScreen(uuid: "X", name: "  ", hasNotch: false)]
         precondition(DisplaySettingList.options(screens: unnamed).map(\.title) == ["Main display"])
 
+        precondition(IslandExtraDisplays.parse(nil).isEmpty)
+        precondition(IslandExtraDisplays.parse("").isEmpty)
+        precondition(IslandExtraDisplays.parse(" LEFT, RIGHT,LEFT ") == ["LEFT", "RIGHT"])
+        precondition(IslandExtraDisplays.storageValue(["RIGHT", "LEFT"]) == "LEFT,RIGHT")
+        let mirrorScreens = [
+            IslandDisplayCandidate(uuid: "MBP", hasNotch: true, containsMouse: false),
+            IslandDisplayCandidate(uuid: "LEFT", hasNotch: false, containsMouse: false),
+            IslandDisplayCandidate(uuid: "RIGHT", hasNotch: false, containsMouse: false),
+        ]
+        precondition(
+            IslandExtraDisplays.mirrorIndexes(selected: ["LEFT", "MBP", "GONE"], primary: 0, candidates: mirrorScreens) == [1]
+        )
+        precondition(
+            IslandExtraDisplays.mirrorIndexes(selected: ["LEFT", "RIGHT"], primary: 0, candidates: mirrorScreens) == [1, 2]
+        )
+        precondition(IslandExtraDisplays.mirrorIndexes(selected: [], primary: 0, candidates: mirrorScreens).isEmpty)
+
         let general = (try? String(contentsOfFile: "NotchBuddy/Sources/App/CoucouSettingsShell.swift", encoding: .utf8)) ?? ""
         precondition(general.contains("SettingsSection(\"Display\")"), "the general tab has a Display setting")
-        precondition(general.contains("Use Coucou on this display, not only the main display."))
+        precondition(general.contains("Show Coucou on each display you turn on. Turn the main display off to keep Coucou on the other screens only."))
         precondition(general.contains("DisplayPicker"))
+        precondition(general.contains("Toggle(\"Main display\""))
+        precondition(general.contains("showOnMainDisplay"))
+        precondition(!general.contains(".constant(true)"))
+        precondition(!general.contains(".disabled(true)"))
+        precondition(general.contains("Toggle(\"Chin\""))
+        precondition(general.contains("chinEnabled"))
         let list = (try? String(contentsOfFile: "NotchBuddy/Sources/App/IslandDisplayChoice.swift", encoding: .utf8)) ?? ""
         precondition(list.contains("\"Main display\""))
 

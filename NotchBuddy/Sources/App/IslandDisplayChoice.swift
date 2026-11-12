@@ -86,6 +86,28 @@ enum DisplaySettingList {
     }
 }
 
+/// Extra screens that show Coucou at the same time as the main display.
+enum IslandExtraDisplays {
+    static func parse(_ raw: String?) -> Set<String> {
+        guard let raw else { return [] }
+        return Set(raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
+    }
+
+    static func storageValue(_ uuids: Set<String>) -> String {
+        uuids.sorted().joined(separator: ",")
+    }
+
+    /// Indexes of selected screens, skipping the screen that already hosts the main island.
+    static func mirrorIndexes(selected: Set<String>,
+                              primary: Int?,
+                              candidates: [IslandDisplayCandidate]) -> [Int] {
+        candidates.enumerated().compactMap { index, candidate in
+            guard index != primary, let uuid = candidate.uuid, !uuid.isEmpty, selected.contains(uuid) else { return nil }
+            return index
+        }
+    }
+}
+
 enum IslandDisplayResolver {
     /// Index of the screen that should host the island, or nil to use the default
     /// (notch screen, else main screen). A disconnected chosen screen falls back too.

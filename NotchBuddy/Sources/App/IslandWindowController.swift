@@ -24,6 +24,10 @@ final class IslandWindowController: NSWindowController {
     private var escapeMonitor: Any?
     private var viewSubscription: AnyCancellable?
     private var displaySubscription: AnyCancellable?
+    private var extraDisplaySubscription: AnyCancellable?
+    private var mainDisplaySubscription: AnyCancellable?
+    /// Coucou on the other screens. The main display keeps `islandPanel`.
+    private var mirrors: [String: IslandPanel] = [:]
     private var autoCloseSubscription: AnyCancellable?
     private var openOnHoverSubscription: AnyCancellable?
 
@@ -100,6 +104,7 @@ final class IslandWindowController: NSWindowController {
         )
         panel.notchWidth  = nW
         panel.notchHeight = nH
+        panel.physicalNotch = fitted.hasNotch
 
         self.init(window: panel)
         self.islandPanel = panel
@@ -107,6 +112,7 @@ final class IslandWindowController: NSWindowController {
         self.notchH = nH
         self.hasNotch = fitted.hasNotch
         setupPanel(screen: screen)
+        syncMirrors()
     }
 
     private func setupPanel(screen: NSScreen) {
@@ -138,7 +144,8 @@ final class IslandWindowController: NSWindowController {
 
         let hosting = NotchHostingView(rootView: IslandRootView()
             .environmentObject(AppState.shared)
-            .environment(\.layoutDirection, .leftToRight))
+            .environment(\.layoutDirection, .leftToRight)
+            .environment(\.coucouPhysicalNotch, screen.safeAreaInsets.top > 0))
         hosting.frame = NSRect(origin: .zero, size: contentSize)
         hosting.autoresizingMask = [.width, .height]
 
@@ -303,14 +310,193 @@ final class IslandWindowController: NSWindowController {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] choice in
                 self?.moveToTargetScreen(choice: choice)
+                self?.syncMirrors()
+            }
+        extraDisplaySubscription = state.$extraDisplays
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.syncMirrors()
+            }
+        mainDisplaySubscription = state.$showOnMainDisplay
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.applyMainDisplay()
             }
 
         // Screen plugged/unplugged, lid closed, arrangement or resolution changed.
         NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.moveToTargetScreen(choice: AppState.shared.islandDisplay) }
+            Task { @MainActor in
+                self?.moveToTargetScreen(choice: AppState.shared.islandDisplay)
+                self?.syncMirrors()
+            }
         }
+    }
+
+    /// Puts a Coucou panel on each extra display and removes one when that display is turned off.
+    private func syncMirrors() {
+        let screens = NSScreen.screens
+        let mouse = NSEvent.mouseLocation
+        let candidates = screens.map {
+            IslandDisplayCandidate(
+                uuid: Self.displayUUID($0),
+                hasNotch: $0.safeAreaInsets.top > 0,
+                containsMouse: $0.frame.contains(mouse)
+            )
+        }
+        let primary = IslandDisplayResolver.index(for: state.islandDisplay, in: candidates)
+        let indexes = IslandExtraDisplays.mirrorIndexes(
+            selected: state.extraDisplays, primary: primary, candidates: candidates
+        )
+        var keep: Set<String> = []
+        for index in indexes {
+            let screen = screens[index]
+            guard let uuid = Self.displayUUID(screen) else { continue }
+            keep.insert(uuid)
+            if mirrors[uuid] == nil {
+                mirrors[uuid] = makeMirror(on: screen)
+            }
+        }
+        for uuid in Array(mirrors.keys) where !keep.contains(uuid) {
+            mirrors[uuid]?.orderOut(nil)
+            mirrors[uuid] = nil
+        }
+        alignMirrors()
+    }
+
+    private func makeMirror(on screen: NSScreen) -> IslandPanel {
+        let panelW = islandPanel.frame.width
+        let panelH = islandPanel.frame.height
+        let sf = screen.frame
+        let panel = IslandPanel(
+            contentRect: NSRect(x: sf.midX - panelW / 2, y: sf.maxY - panelH, width: panelW, height: panelH),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.notchWidth = notchW
+        panel.notchHeight = notchH
+        panel.physicalNotch = screen.safeAreaInsets.top > 0
+        panel.backgroundColor = .clear
+        panel.isOpaque = false
+        panel.hasShadow = false
+        panel.level = islandPanel.level
+        panel.collectionBehavior = islandPanel.collectionBehavior
+        panel.ignoresMouseEvents = true
+        let size = panel.contentRect(forFrameRect: panel.frame).size
+        let container = NSView(frame: NSRect(origin: .zero, size: size))
+        container.autoresizingMask = [.width, .height]
+        let hosting = NotchHostingView(rootView: IslandRootView()
+            .environmentObject(AppState.shared)
+            .environment(\.layoutDirection, .leftToRight)
+            .environment(\.coucouPhysicalNotch, screen.safeAreaInsets.top > 0))
+        hosting.frame = NSRect(origin: .zero, size: size)
+        hosting.autoresizingMask = [.width, .height]
+        container.addSubview(hosting)
+        panel.contentView = container
+        panel.orderFrontRegardless()
+        return panel
+    }
+
+    /// Keeps each extra notch the same size as the main one, centered on its own screen.
+    private func alignMirrors() {
+        let size = islandPanel.frame.size
+        for (uuid, panel) in mirrors {
+            guard let screen = NSScreen.screens.first(where: { Self.displayUUID($0) == uuid }) else { continue }
+            panel.notchWidth = notchW
+            panel.notchHeight = notchH
+            let target = NSRect(
+                x: screen.frame.midX - size.width / 2,
+                y: screen.frame.maxY - size.height,
+                width: size.width,
+                height: size.height
+            )
+            if panel.frame != target {
+                panel.setFrame(target, display: false)
+            }
+        }
+    }
+
+    private func coucouPanels() -> [IslandPanel] {
+        var panels: [IslandPanel] = []
+        if state.showOnMainDisplay, let panel = window as? IslandPanel { panels.append(panel) }
+        panels.append(contentsOf: mirrors.values)
+        return panels
+    }
+
+    /// Hides the built-in notch when Display turns the main screen off.
+    /// A later orderFront, including the one from showWindow, is put back.
+    private func applyMainDisplay() {
+        guard let panel = islandPanel else { return }
+        if state.showOnMainDisplay {
+            if !panel.isVisible { panel.orderFrontRegardless() }
+        } else {
+            panel.ignoresMouseEvents = true
+            if panel.isVisible { panel.orderOut(nil) }
+        }
+    }
+
+    override func showWindow(_ sender: Any?) {
+        super.showWindow(sender)
+        applyMainDisplay()
+    }
+
+    /// The closed island plus its chin, so the pointer can rest on the activity line.
+    private func activityFrame(_ panel: IslandPanel) -> CGRect {
+        let rect = panel.currentIslandFrame(nw: panel.notchWidth, nh: panel.notchHeight)
+        guard state.mode != .expanded,
+              let line = NookBoard.shared.headline, line.id != "tray",
+              !HudController.shared.visible else { return rect }
+        let prefs = NookPreferences.shared
+        guard ActivityChin.shown(
+            enabled: prefs.chinEnabled,
+            physicalNotch: panel.physicalNotch,
+            folded: NookBoard.shared.mainChinFolded
+        ) else { return rect }
+        let chin = ActivityChin(
+            physicalNotch: panel.physicalNotch,
+            housingHeight: panel.notchHeight,
+            chinHeight: CGFloat(prefs.activityChinHeight),
+            chinWidth: CGFloat(prefs.activityChinWidth),
+            openWidth: CGFloat(prefs.activityOpenWidth),
+            barHeight: CGFloat(prefs.activitySecondHeight),
+            fontSize: CoucouType.points(13, scale: prefs.coucouFontScale),
+            showing: true
+        )
+        let width = max(rect.width, chin.widthFloor)
+        let height = chin.restingHeight(fallback: rect.height)
+        let origin = IslandMotion.centeredOrigin(panelWidth: panel.frame.width, islandWidth: width)
+        return CGRect(x: origin, y: panel.frame.height - height, width: width, height: height)
+    }
+
+    /// True when the pointer is on this panel's notch or its open dashboard.
+    private func pointerHits(_ panel: IslandPanel, mouse: NSPoint) -> Bool {
+        let local = CGPoint(x: mouse.x - panel.frame.minX, y: mouse.y - panel.frame.minY)
+        let islandRect = activityFrame(panel)
+        let hoverRect: CGRect
+        if !state.hasNotch && state.mode != .expanded {
+            hoverRect = islandRect
+        } else if state.mode == .expanded {
+            hoverRect = DrawerPull.keepOpenRect(
+                island: islandRect,
+                extended: DrawerPull.isExtended(state.drawerExtension)
+            )
+        } else {
+            hoverRect = islandRect.insetBy(dx: -6, dy: -6)
+        }
+        let buttonHeld = NSEvent.pressedMouseButtons & 1 != 0
+        let pulling = panel === islandPanel && state.drawerPulling && state.mode == .expanded
+        let panelBounds = CGRect(origin: .zero, size: panel.frame.size)
+        let overDrawn = hoverRect.contains(local) || pulling || (buttonHeld && state.mode == .expanded && panelBounds.contains(local))
+        let overPanel = state.mode == .expanded && panelBounds.contains(local)
+        return SettingsNotchPreview.panelTakesThePress(
+            settingsOpen: settingsPreview != .none,
+            overDrawnIsland: overDrawn,
+            overPanel: overPanel
+        )
     }
 
     // MARK: - Screen choice
@@ -552,6 +738,7 @@ final class IslandWindowController: NSWindowController {
     private func pollFrame() {
         guard let panel = window as? IslandPanel else { return }
         matchPanelWidth(panel)
+        alignMirrors()
 
         let mouse = NSEvent.mouseLocation
         followMouseIfNeeded(mouse)
@@ -560,48 +747,22 @@ final class IslandWindowController: NSWindowController {
         let pf = panel.frame
         let local = CGPoint(x: mouse.x - pf.minX, y: mouse.y - pf.minY)
 
-        // Island rect in panel coords
+        // Island rect in panel coords. Haptics stay on the main display.
         let islandRect = panel.currentIslandFrame(nw: notchW, nh: notchH)
-        // On a screen without a notch, the resting bar must not intercept clicks
-        // in the app window immediately below the menu bar.
-        // A pulled-down drawer keeps a region five times its area before closing.
-        let hoverRect: CGRect
-        if !hasNotch && state.mode != .expanded {
-            hoverRect = islandRect
-        } else if state.mode == .expanded {
-            hoverRect = DrawerPull.keepOpenRect(
-                island: islandRect,
-                extended: DrawerPull.isExtended(state.drawerExtension)
-            )
-        } else {
-            hoverRect = islandRect.insetBy(dx: -6, dy: -6)
-        }
-        let buttonHeld = NSEvent.pressedMouseButtons & 1 != 0
-        let pulling = state.drawerPulling && state.mode == .expanded
-        let panelBounds = CGRect(origin: .zero, size: panel.frame.size)
-        // While the drawer is open the whole panel must take the press. A tray
-        // chip can sit outside the hover math, and a click there used to fall
-        // through to the desktop. Settings sits under that panel, so an open
-        // settings tab keeps the press on the drawn island only.
-        let overDrawn = hoverRect.contains(local) || pulling || (buttonHeld && state.mode == .expanded)
-        let overPanel = state.mode == .expanded && panelBounds.contains(local)
-        let inIsland = SettingsNotchPreview.panelTakesThePress(
-            settingsOpen: settingsPreview != .none,
-            overDrawnIsland: overDrawn,
-            overPanel: overPanel
-        )
+        // A notch on another display counts too, so the pointer can rest there.
+        let inIsland = coucouPanels().contains { pointerHits($0, mouse: mouse) }
 
-        // Toggle click-through
-        let shouldAcceptMouse = inIsland || inAttachDrag || attachDragStart != nil
-        if panel.ignoresMouseEvents == shouldAcceptMouse {
-            panel.ignoresMouseEvents = !shouldAcceptMouse
-            if shouldAcceptMouse, let cv = panel.contentView {
-                panel.invalidateCursorRects(for: cv)
+        for candidate in coucouPanels() {
+            let accept = pointerHits(candidate, mouse: mouse) || (candidate === islandPanel && (inAttachDrag || attachDragStart != nil))
+            if candidate.ignoresMouseEvents == accept {
+                candidate.ignoresMouseEvents = !accept
+                if accept, let cv = candidate.contentView {
+                    candidate.invalidateCursorRects(for: cv)
+                }
             }
-        }
-        // Teach SwiftUI's views to take the first press before the user clicks.
-        if state.mode == .expanded, let root = panel.contentView {
-            NotchClickDelivery.patchTree(root)
+            if state.mode == .expanded, let root = candidate.contentView {
+                NotchClickDelivery.patchTree(root)
+            }
         }
 
         // Mouse in desktop space (y-down from the menu-bar screen top) for Bot look-at
@@ -614,10 +775,11 @@ final class IslandWindowController: NSWindowController {
         // AppState can hide the island by itself (last task ended): keep the FSM in step.
         if state.mode == .hidden && fsm.state == .petit { fsm.hiddenExternally() }
 
+        applyMainDisplay()
         let prefs = NookPreferences.shared
         let typingLock = prefs.typingLocked
 
-        if !hasNotch {
+        if state.showOnMainDisplay && !hasNotch {
             if !prefs.handlerEnabled {
                 panel.alphaValue = 0
             } else if prefs.handlerTransparent {
@@ -625,7 +787,7 @@ final class IslandWindowController: NSWindowController {
             } else if panel.alphaValue != 1 {
                 panel.alphaValue = 1
             }
-        } else if panel.alphaValue != 1 {
+        } else if state.showOnMainDisplay && panel.alphaValue != 1 {
             panel.alphaValue = 1
         }
 
@@ -662,7 +824,7 @@ final class IslandWindowController: NSWindowController {
         }
 
         // Feed FSM hover enter/leave
-        if !typingLock && inIsland && !wasInIsland {
+        if !typingLock && inIsland && !wasInIsland && !NookBoard.shared.chinPreview {
             guard !inAttachDrag else { wasInIsland = inIsland; return }
             // If in coucou: tell greeting to stay open (tc → infinity)
             if fsm.state == .coucou {
@@ -699,10 +861,10 @@ final class IslandWindowController: NSWindowController {
                 fsm.mouseLeft()
             }
         }
-        if !hapticReady {
+        if state.showOnMainDisplay && !hapticReady {
             hapticWasOutside = NotchHaptics.distance(from: local, to: islandRect) > NotchHaptics.approachBand
             hapticReady = true
-        } else {
+        } else if state.showOnMainDisplay {
             let distance = NotchHaptics.distance(from: local, to: islandRect)
             let step = NotchHaptics.approach(
                 distance: distance,
@@ -868,7 +1030,12 @@ final class IslandWindowController: NSWindowController {
         let page = SettingsNotchPreview.page(for: tab)
         settingsPreview = page
         if page == .none {
-            NookBoard.shared.dropWing = false
+            let board = NookBoard.shared
+            board.dropWing = false
+            if board.chinPreview {
+                board.chinPreview = false
+                board.refreshChrome()
+            }
             if !wasInIsland { fsm.hideNow() }
             return
         }
@@ -877,6 +1044,11 @@ final class IslandWindowController: NSWindowController {
 
     private func keepSettingsPreview() {
         let board = NookBoard.shared
+        let previewChin = settingsPreview == .activities && NookPreferences.shared.chinEnabled
+        if board.chinPreview != previewChin {
+            board.chinPreview = previewChin
+            board.refreshChrome()
+        }
         var resized = false
         func setDrop(_ on: Bool) {
             guard board.dropWing != on else { return }
@@ -898,7 +1070,7 @@ final class IslandWindowController: NSWindowController {
         case .activities:
             setTray(false)
             setDrop(false)
-            presentCompact()
+            presentCollapsedChin()
         case .nook:
             setDrop(false)
             setTray(false)
@@ -938,6 +1110,18 @@ final class IslandWindowController: NSWindowController {
             setMode(.compact)
         } else {
             fsm.showPetit()
+        }
+    }
+
+    /// The chin sliders need the collapsed notch, with the line in the chin.
+    private func presentCollapsedChin() {
+        state.drawerExtension = 0
+        state.drawerPulling = false
+        guard state.mode != .hidden || fsm.state != .hidden else { return }
+        if fsm.state == .hidden {
+            setMode(.hidden)
+        } else {
+            fsm.hideNow()
         }
     }
 
@@ -1191,11 +1375,11 @@ final class IslandWindowController: NSWindowController {
 
     private func startKeyMonitor() {
         NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
-            MainActor.assumeIsolated { self?.handleNotchScroll(event) }
-            return event
+            let consumed = MainActor.assumeIsolated { self?.handleNotchScroll(event) ?? false }
+            return consumed ? nil : event
         }
         NSEvent.addGlobalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
-            Task { @MainActor in self?.handleNotchScroll(event) }
+            Task { @MainActor in _ = self?.handleNotchScroll(event) }
         }
 
         keyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
@@ -1666,29 +1850,54 @@ final class IslandWindowController: NSWindowController {
 
     /// The closed-notch color under a screen point. The open drawer uses `terminalBlob`.
     func closedTerminalBlob(at screenPoint: CGPoint) -> String? {
-        guard state.mode != .expanded, let panel = window else { return nil }
+        guard state.mode != .expanded else { return nil }
+        guard let panel = coucouPanels().first(where: { $0.frame.contains(screenPoint) }) else { return nil }
         let (islandW, islandH) = islandSize(
             mode: state.mode,
             view: state.view,
             progress: state.uploadProgress,
-            nw: notchW,
-            nh: notchH,
+            nw: panel.notchWidth,
+            nh: panel.notchHeight,
             hasNotch: state.hasNotch
         )
         let local = CGPoint(x: screenPoint.x - panel.frame.minX, y: screenPoint.y - panel.frame.minY)
-        let islandLeft = IslandMotion.centeredOrigin(panelWidth: panel.frame.width, islandWidth: islandW)
-        let clearance = NotchClearance(occludedHeight: state.hasNotch ? notchH : 0)
-        let earHeight = clearance.expandedOffset > 0 ? clearance.expandedOffset : islandH
-        let centers = TerminalBehavior.collapsedBlobCenters(
-            islandWidth: islandW,
-            notchWidth: state.hasNotch ? notchW : 0
+        let y = panel.frame.height - local.y
+        if panel.physicalNotch {
+            let islandLeft = IslandMotion.centeredOrigin(panelWidth: panel.frame.width, islandWidth: islandW)
+            let clearance = NotchClearance(occludedHeight: state.hasNotch ? panel.notchHeight : 0)
+            let earHeight = clearance.expandedOffset > 0 ? clearance.expandedOffset : islandH
+            let centers = TerminalBehavior.collapsedBlobCenters(
+                islandWidth: islandW,
+                notchWidth: state.hasNotch ? panel.notchWidth : 0
+            )
+            return TerminalBehavior.collapsedBlobSlot(
+                x: local.x - islandLeft,
+                y: y,
+                centerX: centers.facesX,
+                centerY: clearance.earCenterY(fallback: islandH),
+                scale: IslandRestingLayout(width: islandW, height: earHeight).miniGridScale
+            )
+        }
+        let prefs = NookPreferences.shared
+        let chin = ActivityChin(
+            physicalNotch: false,
+            housingHeight: panel.notchHeight,
+            chinHeight: CGFloat(prefs.activityChinHeight),
+            chinWidth: CGFloat(prefs.activityChinWidth),
+            openWidth: CGFloat(prefs.activityOpenWidth),
+            barHeight: CGFloat(prefs.activitySecondHeight),
+            fontSize: CoucouType.points(13, scale: prefs.coucouFontScale),
+            showing: prefs.chinEnabled
         )
+        let width = max(islandW, chin.widthFloor)
+        let height = prefs.chinEnabled ? max(chin.lineBox, chin.barHeight) : islandH
+        let islandLeft = IslandMotion.centeredOrigin(panelWidth: panel.frame.width, islandWidth: width)
         return TerminalBehavior.collapsedBlobSlot(
             x: local.x - islandLeft,
-            y: panel.frame.height - local.y,
-            centerX: centers.facesX,
-            centerY: clearance.earCenterY(fallback: islandH),
-            scale: IslandRestingLayout(width: islandW, height: earHeight).miniGridScale
+            y: y,
+            centerX: ActivityChin.plainFaceCenter(width: width),
+            centerY: height / 2,
+            scale: chin.contentScale
         )
     }
 
@@ -1923,6 +2132,8 @@ final class IslandWindowController: NSWindowController {
     }
 
     private var lastNotchGesture = Date.distantPast
+    private var lastUsageScrollStamp: TimeInterval = -1
+    private var scrollingUsage = false
 
     private func handleEscape() {
         if TerminalDesk.shared.consumeEscape() { return }
@@ -1932,15 +2143,17 @@ final class IslandWindowController: NSWindowController {
         }
     }
 
-    private func handleNotchScroll(_ event: NSEvent) {
+    /// True when the gesture scrolled the usage list and should not open or close the notch.
+    private func handleNotchScroll(_ event: NSEvent) -> Bool {
         let prefs = NookPreferences.shared
-        guard Date().timeIntervalSince(lastNotchGesture) > 0.45 else { return }
         let dx = event.scrollingDeltaX
         let dy = event.scrollingDeltaY
         let mouse = NSEvent.mouseLocation
         let overNotch = isMouseOverIsland(mouse)
-        if overNotch && !prefs.gesturesWhileHovering { return }
-        if !overNotch { return }
+        if overNotch, scrollUsageList(event, at: mouse) { return true }
+        guard Date().timeIntervalSince(lastNotchGesture) > 0.45 else { return false }
+        if overNotch && !prefs.gesturesWhileHovering { return false }
+        if !overNotch { return false }
 
         if prefs.horizontalMediaGestures,
            abs(dx) > 8, abs(dx) > abs(dy),
@@ -1952,12 +2165,12 @@ final class IslandWindowController: NSWindowController {
                 invert: prefs.invertMediaGestures
             )
             NookBoard.shared.skip(next: next)
-            return
+            return false
         }
 
-        guard prefs.verticalGestures else { return }
-        guard settingsPreview == .none else { return }
-        guard abs(dy) > 8, abs(dy) > abs(dx) else { return }
+        guard prefs.verticalGestures else { return false }
+        guard settingsPreview == .none else { return false }
+        guard abs(dy) > 8, abs(dy) > abs(dx) else { return false }
         lastNotchGesture = Date()
         if dy > 0 {
             if fsm.state == .hidden || fsm.state == .petit { fsm.click() }
@@ -1967,13 +2180,48 @@ final class IslandWindowController: NSWindowController {
             setMode(.hidden)
             fsm.hiddenExternally()
         }
+        return false
+    }
+
+    /// A trackpad gesture on the usage rows moves that list. The same gesture elsewhere still opens and closes the notch.
+    private func scrollUsageList(_ event: NSEvent, at mouse: CGPoint) -> Bool {
+        guard state.mode == .expanded, !scrollingUsage, let scroll = usageScrollView(atScreen: mouse) else { return false }
+        if event.timestamp == lastUsageScrollStamp { return true }
+        lastUsageScrollStamp = event.timestamp
+        scrollingUsage = true
+        scroll.scrollWheel(with: event)
+        scrollingUsage = false
+        return true
+    }
+
+    private func usageScrollView(atScreen mouse: CGPoint) -> NSScrollView? {
+        for panel in coucouPanels() {
+            guard panel.frame.contains(mouse), let content = panel.contentView else { continue }
+            let windowPoint = panel.convertPoint(fromScreen: mouse)
+            guard let scroll = markedScroll(in: content) else { continue }
+            let local = scroll.convert(windowPoint, from: nil)
+            if scroll.bounds.contains(local) { return scroll }
+        }
+        return nil
+    }
+
+    private func markedScroll(in view: NSView) -> NSScrollView? {
+        if view.identifier?.rawValue == UsageBehavior.scrollMarker {
+            if let scroll = view as? NSScrollView { return scroll }
+            if let scroll = view.enclosingScrollView { return scroll }
+        }
+        for sub in view.subviews {
+            if let found = markedScroll(in: sub) { return found }
+        }
+        return nil
     }
 
     private func isMouseOverIsland(_ mouse: CGPoint) -> Bool {
-        guard let panel = window as? IslandPanel else { return false }
-        let local = CGPoint(x: mouse.x - panel.frame.minX, y: mouse.y - panel.frame.minY)
-        let islandRect = panel.currentIslandFrame(nw: notchW, nh: notchH)
-        return islandRect.insetBy(dx: -6, dy: -6).contains(local)
+        coucouPanels().contains { panel in
+            let local = CGPoint(x: mouse.x - panel.frame.minX, y: mouse.y - panel.frame.minY)
+            let islandRect = activityFrame(panel)
+            return islandRect.insetBy(dx: -6, dy: -6).contains(local)
+        }
     }
 
     /// Top of the menu-bar screen in AppKit coordinates: origin of `DesktopSpace`.
@@ -2134,6 +2382,8 @@ final class NotchHostingView<Content: View>: NSHostingView<Content> {
 final class IslandPanel: NSPanel {
     var notchWidth:  CGFloat = IslandConst.notchWidth
     var notchHeight: CGFloat = IslandConst.notchHeight
+    /// The MacBook camera housing. A second display stays false.
+    var physicalNotch = false
 
     override var canBecomeKey:  Bool { true }
     override var canBecomeMain: Bool { false }

@@ -98,10 +98,15 @@ enum UsageBehavior {
 
     static var stackWidth: CGFloat { TerminalBehavior.overviewLeftCard - stackLeading - 8 }
 
-    /// Top of the first model, just under the blob.
+    /// Air under the white blob so the top usage row does not sit in the blob.
+    static let blobPad: CGFloat = 12
+    /// Marks the usage list so a scroll gesture there moves the rows.
+    static let scrollMarker = "coucou.usageLimits"
+
+    /// Top of the column captions, clear of the white blob.
     static var stackTop: CGFloat {
         let centerY = TerminalBehavior.overviewBlobCenterY - TerminalBehavior.menuBarHeaderBand
-        return centerY + blobDiameter / 2 + 2
+        return centerY + blobDiameter / 2 + 2 + blobPad
     }
 
     static var stackHeight: CGFloat {
@@ -124,11 +129,23 @@ enum UsageBehavior {
     }
 
     /// Height of the model list. `offered` is the open room above the player.
-    /// Every row that fits is shown. The rest scroll inside that room.
-    static func rowListHeight(rowCount: Int, offered: CGFloat) -> CGFloat {
+    /// The height lands on a whole row, so the last painted row is not sliced.
+    /// Rows that do not fit scroll inside that room.
+    static func rowListHeight(
+        rowCount: Int,
+        offered: CGFloat,
+        row: CGFloat = UsageBehavior.row,
+        gap: CGFloat = UsageBehavior.gap
+    ) -> CGFloat {
         let rows = max(0, rowCount)
+        if rows == 0 { return 0 }
         let full = row * CGFloat(rows) + gap * CGFloat(max(0, rows - 1))
-        return min(full, max(row, offered))
+        let room = max(row, offered)
+        if full <= room { return full }
+        let stride = row + gap
+        let fit = max(1, Int(floor((room + gap) / stride)))
+        let shown = min(rows, fit)
+        return row * CGFloat(shown) + gap * CGFloat(max(0, shown - 1))
     }
 
     /// Resting-drawer list height. Extra rows stay inside the notch.

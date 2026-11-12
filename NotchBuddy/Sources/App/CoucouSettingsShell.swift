@@ -4,9 +4,65 @@ import ServiceManagement
 import EventKit
 import UniformTypeIdentifiers
 
-/// The settings form sits in one column, in from the window edges.
+private struct CoucouSettingsFaceKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    /// True only inside the settings window. The notch stays on Font size alone.
+    var coucouSettingsFace: Bool {
+        get { self[CoucouSettingsFaceKey.self] }
+        set { self[CoucouSettingsFaceKey.self] = newValue }
+    }
+}
+
+/// One face for Coucou text. Font size always applies. Settings font applies on the settings page only.
+private struct CoucouFace: ViewModifier {
+    @ObservedObject private var prefs = NookPreferences.shared
+    @Environment(\.coucouSettingsFace) private var settingsPage
+    var base: CGFloat
+    var weight: Font.Weight = .regular
+    var design: Font.Design = .default
+
+    func body(content: Content) -> some View {
+        content.font(.system(
+            size: faceSize,
+            weight: weight,
+            design: design
+        ))
+    }
+
+    private var faceSize: CGFloat {
+        let notch = CoucouType.points(base, scale: prefs.coucouFontScale)
+        guard settingsPage else { return notch }
+        return notch * CGFloat(CoucouType.clamp(prefs.settingsFontScale))
+    }
+}
+
+extension View {
+    /// Settings font size. Callers that own a fixed frame grow it with `CoucouType.points`.
+    func coucouFont(_ base: CGFloat, weight: Font.Weight = .regular, design: Font.Design = .default) -> some View {
+        modifier(CoucouFace(base: base, weight: weight, design: design))
+    }
+}
+
+func coucouBox(_ base: CGFloat) -> CGFloat {
+    MainActor.assumeIsolated {
+        CoucouType.points(base, scale: NookPreferences.shared.coucouFontScale)
+    }
+}
+
+/// Settings-page frames. The notch keeps `coucouBox`, which ignores Settings font.
+func settingsBox(_ base: CGFloat) -> CGFloat {
+    MainActor.assumeIsolated {
+        let prefs = NookPreferences.shared
+        return CoucouType.points(base, scale: prefs.coucouFontScale)
+            * CGFloat(CoucouType.clamp(prefs.settingsFontScale))
+    }
+}
+
+/// Adjustment scales stay a short track. The form itself uses the window width.
 private enum SettingsPage {
-    static let columnWidth: CGFloat = 640
     /// Keeps each adjustment scale off the side of the page.
     static let scaleInset: CGFloat = 28
     static let scaleTrack: CGFloat = 220
@@ -53,6 +109,7 @@ struct CoucouSettingsShell: View {
                 .zIndex(1)
                 .background(Color(nsColor: .windowBackgroundColor))
             Divider()
+            fontSizeControl
             Group {
                 switch tab {
                 case .general: GeneralSettingsPane()
@@ -71,13 +128,22 @@ struct CoucouSettingsShell: View {
                 case .about: AboutSettingsPane()
                 }
             }
-            .frame(maxWidth: SettingsPage.columnWidth, maxHeight: .infinity, alignment: .top)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .clipped()
             Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .frame(minWidth: 720, minHeight: 520)
+        .frame(
+            minWidth: 1080,
+            idealWidth: 1480,
+            maxWidth: .infinity,
+            minHeight: 520,
+            idealHeight: 900,
+            maxHeight: .infinity,
+            alignment: .top
+        )
+        .environment(\.coucouSettingsFace, true)
+        .coucouFont(13)
+        .environment(\.coucouSettingsFace, true)
         .preferredColorScheme(.dark)
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear { postNotchPreview(tab) }
@@ -93,32 +159,122 @@ struct CoucouSettingsShell: View {
         NotificationCenter.default.post(name: .settingsNotchPreview, object: tab.rawValue)
     }
 
+    /// Font size changes the notch and this page. Settings font changes this page only.
+    private var fontSizeControl: some View {
+        HStack(spacing: 8) {
+            Text("Font size")
+                .coucouFont(12, weight: .semibold)
+            Button {
+                stepFont(-0.1)
+            } label: {
+                Text("A−")
+                    .coucouFont(14, weight: .semibold)
+            }
+            .buttonStyle(.bordered)
+            .help("Smaller text")
+            Text(fontSizePercent)
+                .coucouFont(12, design: .monospaced)
+                .frame(minWidth: settingsBox(48))
+            Button {
+                stepFont(0.1)
+            } label: {
+                Text("A+")
+                    .coucouFont(18, weight: .semibold)
+            }
+            .buttonStyle(.bordered)
+            .help("Larger text")
+            Text("Settings font")
+                .coucouFont(12, weight: .semibold)
+                .padding(.leading, 16)
+                .help("Only the settings page")
+            Button {
+                stepSettings(-0.1)
+            } label: {
+                Text("A−")
+                    .coucouFont(14, weight: .semibold)
+            }
+            .buttonStyle(.bordered)
+            .help("Smaller settings text")
+            Text(settingsFontPercent)
+                .coucouFont(12, design: .monospaced)
+                .frame(minWidth: settingsBox(48))
+            Button {
+                stepSettings(0.1)
+            } label: {
+                Text("A+")
+                    .coucouFont(18, weight: .semibold)
+            }
+            .buttonStyle(.bordered)
+            .help("Larger settings text")
+            Spacer(minLength: 16)
+            LaunchAtLoginToggle()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var fontSizePercent: String {
+        "\(Int((prefs.coucouFontScale * 100).rounded()))%"
+    }
+
+    private var settingsFontPercent: String {
+        "\(Int((prefs.settingsFontScale * 100).rounded()))%"
+    }
+
+    private func stepFont(_ delta: Double) {
+        prefs.coucouFontScale = SettingsBoard.fontScale(prefs.coucouFontScale + delta)
+        prefs.persist()
+    }
+
+    private func stepSettings(_ delta: Double) {
+        prefs.settingsFontScale = SettingsBoard.fontScale(prefs.settingsFontScale + delta)
+        prefs.persist()
+    }
+
     private var tabBar: some View {
-        HStack(spacing: 4) {
-            ForEach(CoucouSettingsTab.allCases) { item in
+        ViewThatFits(in: .horizontal) {
+            tabRow(Array(CoucouSettingsTab.allCases))
+            VStack(alignment: .leading, spacing: settingsBox(4)) {
+                tabRow(Array(CoucouSettingsTab.allCases.prefix(4)))
+                tabRow(Array(CoucouSettingsTab.allCases.suffix(4)))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.top, 8)
+        .padding(.bottom, 6)
+    }
+
+    /// Each tile shares the window width. A second row appears when eight minimum tiles no longer fit.
+    private func tabRow(_ items: [CoucouSettingsTab]) -> some View {
+        HStack(spacing: settingsBox(4)) {
+            ForEach(items) { item in
                 Button {
                     tab = item
                 } label: {
-                    VStack(spacing: 4) {
+                    VStack(spacing: settingsBox(4)) {
                         Image(systemName: item.symbol)
-                            .font(.system(size: 16))
+                            .coucouFont(16)
                         Text(item.title)
-                            .font(.system(size: 10))
+                            .coucouFont(10)
                             .lineLimit(1)
+                            .minimumScaleFactor(0.65)
+                            .multilineTextAlignment(.center)
                     }
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
+                    .padding(.horizontal, settingsBox(6))
+                    .padding(.vertical, settingsBox(8))
                     .foregroundStyle(tab == item ? Color.accentColor : Color.secondary)
                     .background(tab == item ? Color.accentColor.opacity(0.16) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
                     .contentShape(.interaction, RoundedRectangle(cornerRadius: 8))
                 }
                 .buttonStyle(.plain)
+                .frame(minWidth: settingsBox(84), maxWidth: .infinity)
                 .help(item.title)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.top, 8)
-        .padding(.bottom, 6)
+        .frame(maxWidth: .infinity)
     }
 
     private func bind<T>(_ path: ReferenceWritableKeyPath<NookPreferences, T>) -> Binding<T> {
@@ -128,27 +284,64 @@ struct CoucouSettingsShell: View {
 
 // MARK: - General
 
-private struct GeneralSettingsPane: View {
-    @ObservedObject private var prefs = NookPreferences.shared
+private struct LaunchAtLoginToggle: View {
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var status = ""
 
     var body: some View {
+        HStack(spacing: 8) {
+            Toggle("Launch at login", isOn: $launchAtLogin)
+                .toggleStyle(.switch)
+                .onChange(of: launchAtLogin) { _, on in setLaunch(on) }
+            if !status.isEmpty {
+                Text(status)
+                    .coucouFont(11)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    private func setLaunch(_ on: Bool) {
+        do {
+            if on { try SMAppService.mainApp.register() }
+            else { try SMAppService.mainApp.unregister() }
+            status = ""
+        } catch {
+            status = error.localizedDescription
+            launchAtLogin = !on
+        }
+    }
+}
+
+private struct GeneralSettingsPane: View {
+    @ObservedObject private var prefs = NookPreferences.shared
+
+    var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                SettingsSection("Startup") {
-                    Toggle("Launch at login", isOn: $launchAtLogin)
-                        .toggleStyle(.switch)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .onChange(of: launchAtLogin) { _, on in setLaunch(on) }
-                }
+                HStack(alignment: .top, spacing: 16) {
+                    SettingsSection("Display") {
+                        DisplayPicker()
+                        Text("Show Coucou on each display you turn on. Turn the main display off to keep Coucou on the other screens only.")
+                            .coucouFont(11)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
 
-                SettingsSection("Display") {
-                    DisplayPicker()
-                    Text("Use Coucou on this display, not only the main display. A display without a notch uses the handler.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    SettingsSection("Screens without a notch") {
+                        Toggle("Show a handler", isOn: bind(\.handlerEnabled))
+                        Text("A stand-in notch on a screen with no camera housing.")
+                            .coucouFont(11)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        compactSlider("Width", value: settingsSlider("handlerWidth", prefs, \.handlerWidth), range: 40...220)
+                        compactSlider("Height", value: settingsSlider("handlerHeight", prefs, \.handlerHeight), range: 16...64)
+                        checkRow(title: "", "Transparent handler", bind(\.handlerTransparent),
+                                 caption: "Will only show up on mouse hover.")
+                    }
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
 
                 TerminalSettingsSection()
@@ -157,102 +350,38 @@ private struct GeneralSettingsPane: View {
                     .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 12))
 
                 HStack(alignment: .top, spacing: 16) {
-                    VStack(alignment: .leading, spacing: 16) {
-                        SettingsSection("Notch") {
-                            compactChoice("Show in fullscreen", selection: settingsChoice("showInFullscreen", prefs, \.showInFullscreen)) {
-                                Text("On notched screens").tag("notched")
-                                Text("Always").tag("always")
-                                Text("Never").tag("never")
-                            }
-                            compactChoice("Media source", selection: settingsChoice("mediaSource", prefs, \.mediaSource)) {
-                                Text("System").tag("system")
-                                Text("Music").tag("music")
-                                Text("Spotify").tag("spotify")
-                            }
-                            checkRow(title: "", "Prefer round buttons", bind(\.preferRoundButtons),
-                                     caption: "Use capsules instead of rounded rectangles for buttons.")
-                            checkRow(title: "", "Translucent notch background (experimental)", bind(\.translucentNotch), caption: nil)
-                            checkRow(title: "", "Always open on hover", bind(\.alwaysOpenOnHover),
-                                     caption: "This will disable some of Coucou's gestures.")
-                            checkRow(
-                                title: "",
-                                "Haptic feedback",
-                                hapticsOn,
-                                caption: "A firm click when the pointer nears the edge of the notch. On by default."
-                            )
+                    SettingsSection("Notch") {
+                        compactChoice("Show in fullscreen", selection: settingsChoice("showInFullscreen", prefs, \.showInFullscreen)) {
+                            Text("On notched screens").tag("notched")
+                            Text("Always").tag("always")
+                            Text("Never").tag("never")
                         }
-                        SettingsSection("Typing") {
-                            checkRow(title: "", "Prevent from closing on mouse leave", bind(\.preventCloseOnMouseLeave), caption: nil)
-                            checkRow(title: "", "Lock while typing", bind(\.lockWhileTyping), caption: nil)
-                        }
+                        checkRow(title: "", "Prefer round buttons", bind(\.preferRoundButtons),
+                                 caption: "Use capsules instead of rounded rectangles for buttons.")
+                        checkRow(title: "", "Translucent notch background (experimental)", bind(\.translucentNotch), caption: nil)
+                        checkRow(title: "", "Demo mode", bind(\.demoMode),
+                                 caption: "Prevents Coucou from hiding when idle. Useful for screen recordings (this has no effect on non-notched screens).")
                     }
                     .frame(maxWidth: .infinity, alignment: .topLeading)
 
                     VStack(alignment: .leading, spacing: 16) {
-                        SettingsSection("Spacing") {
-                            compactSlider("Content padding", value: settingsSlider("contentPadding", prefs, \.contentPadding), range: 0...32)
-                        }
                         SettingsSection("Notch size") {
                             Text("Fine tune the guess so it matches your notch.")
-                                .font(.system(size: 11))
+                                .coucouFont(11)
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
+                            compactSlider("Content padding", value: settingsSlider("contentPadding", prefs, \.contentPadding), range: 0...32)
                             compactSlider("Width", value: settingsSlider("notchWidthOffset", prefs, \.notchWidthOffset), range: -40...40)
                             compactSlider("Height", value: settingsSlider("notchHeightOffset", prefs, \.notchHeightOffset), range: -40...40)
                         }
-                        SettingsSection("Screens without a notch") {
-                            Toggle("Show a handler", isOn: bind(\.handlerEnabled))
-                            Text("A stand-in notch on a screen with no camera housing.")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                            compactSlider("Width", value: settingsSlider("handlerWidth", prefs, \.handlerWidth), range: 40...220)
-                            compactSlider("Height", value: settingsSlider("handlerHeight", prefs, \.handlerHeight), range: 16...64)
-                            checkRow(title: "", "Transparent handler", bind(\.handlerTransparent),
-                                     caption: "Will only show up on mouse hover.")
-                        }
+                        NotchBehaviorSettings()
                     }
                     .frame(maxWidth: .infinity, alignment: .topLeading)
-                }
-
-                SettingsSection("Other") {
-                    checkRow(title: "", "Demo mode", bind(\.demoMode),
-                             caption: "Prevents Coucou from hiding when idle. Useful for screen recordings (this has no effect on non-notched screens).")
-                    Button("Reset all settings") { prefs.reset(); status = "Notch settings reset. API keys were kept." }
-                        .buttonStyle(.bordered)
-                    Text("This will reset the notch, gestures, activities, nook, tray, and drop area. API keys stay.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                    Button("Quit Coucou") { NSApp.terminate(nil) }
-                        .buttonStyle(.bordered)
-                    Text("You can also right click the menu bar icon.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                    if !status.isEmpty {
-                        Text(status).font(.system(size: 11)).foregroundStyle(.secondary)
-                    }
                 }
             }
             .padding(22)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-    }
-
-    private func setLaunch(_ on: Bool) {
-        do {
-            if on { try SMAppService.mainApp.register() }
-            else { try SMAppService.mainApp.unregister() }
-        } catch {
-            status = error.localizedDescription
-            launchAtLogin = !on
-        }
-    }
-
-    private var hapticsOn: Binding<Bool> {
-        Binding(
-            get: { SettingsBoard.hapticsOn(disableHaptics: prefs.disableHaptics) },
-            set: { prefs.disableHaptics = SettingsBoard.disableHaptics(uiOn: $0); prefs.persist() }
-        )
     }
 
     private func bind<T>(_ path: ReferenceWritableKeyPath<NookPreferences, T>) -> Binding<T> {
@@ -273,22 +402,30 @@ private struct DisplayPicker: View {
         })
     }
 
-    var body: some View {
-        let options = options
-        compactChoice("Display", selection: selection(options)) {
-            ForEach(options) { option in
-                Text(option.title).tag(option.id)
-            }
-        }
+    private var extras: [DisplaySettingOption] {
+        Array(options.dropFirst())
     }
 
-    private func selection(_ options: [DisplaySettingOption]) -> Binding<String> {
-        Binding(
-            get: {
-                let id = state.islandDisplay.storageValue
-                return options.contains { $0.id == id } ? id : IslandDisplayChoice.notch.storageValue
-            },
-            set: { state.islandDisplay = IslandDisplayChoice(storageValue: $0) }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle("Main display", isOn: Binding(
+                get: { state.showOnMainDisplay },
+                set: { state.showOnMainDisplay = $0 }
+            ))
+                .toggleStyle(.switch)
+            ForEach(extras) { option in
+                Toggle(option.title, isOn: extraBinding(option.id))
+                    .toggleStyle(.switch)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func extraBinding(_ id: String) -> Binding<Bool> {
+        let uuid = String(id.dropFirst("display:".count))
+        return Binding(
+            get: { state.extraDisplays.contains(uuid) },
+            set: { state.setExtraDisplay(uuid, on: $0) }
         )
     }
 }
@@ -299,20 +436,48 @@ private struct GestureSettingsPane: View {
     @ObservedObject private var prefs = NookPreferences.shared
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Toggle("Allow gestures when hovering the notch", isOn: bind(\.gesturesWhileHovering))
-            Toggle("Open/close notch with vertical gestures", isOn: bind(\.verticalGestures))
-            Toggle("Control media with horizontal gestures", isOn: bind(\.horizontalMediaGestures))
-            Toggle("Invert media gestures actions", isOn: bind(\.invertMediaGestures))
-                .disabled(!SettingsBoard.invertGestureControlEnabled(horizontalOn: prefs.horizontalMediaGestures))
-            Text("If on, a left swipe will start the next song, if off, the previous one.")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer()
+        ScrollView {
+            HStack(alignment: .top, spacing: 16) {
+                SettingsSection("Notch") {
+                    Toggle("Allow gestures when hovering the notch", isOn: bind(\.gesturesWhileHovering))
+                    Toggle("Open/close notch with vertical gestures", isOn: bind(\.verticalGestures))
+                    checkRow(title: "", "Always open on hover", bind(\.alwaysOpenOnHover),
+                             caption: "This will disable some of Coucou's gestures.")
+                    checkRow(
+                        title: "",
+                        "Haptic feedback",
+                        hapticsOn,
+                        caption: "A firm click when the pointer nears the edge of the notch. On by default."
+                    )
+                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                VStack(alignment: .leading, spacing: 16) {
+                    SettingsSection("Media") {
+                        Toggle("Control media with horizontal gestures", isOn: bind(\.horizontalMediaGestures))
+                        Toggle("Invert media gestures actions", isOn: bind(\.invertMediaGestures))
+                            .disabled(!SettingsBoard.invertGestureControlEnabled(horizontalOn: prefs.horizontalMediaGestures))
+                        Text("If on, a left swipe will start the next song, if off, the previous one.")
+                            .coucouFont(11)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    SettingsSection("Typing") {
+                        checkRow(title: "", "Prevent from closing on mouse leave", bind(\.preventCloseOnMouseLeave), caption: nil)
+                        checkRow(title: "", "Lock while typing", bind(\.lockWhileTyping), caption: nil)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+            .padding(22)
         }
-        .padding(28)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private var hapticsOn: Binding<Bool> {
+        Binding(
+            get: { SettingsBoard.hapticsOn(disableHaptics: prefs.disableHaptics) },
+            set: { prefs.disableHaptics = SettingsBoard.disableHaptics(uiOn: $0); prefs.persist() }
+        )
     }
 
     private func bind<T>(_ path: ReferenceWritableKeyPath<NookPreferences, T>) -> Binding<T> {
@@ -347,33 +512,88 @@ private struct LiveActivitySettingsPane: View {
             .fixedSize(horizontal: false, vertical: true)
 
             if page == 0 {
-                VStack(spacing: 16) {
-                    SettingsSection("Show in the notch") {
-                        ForEach(rowsBeforeTiming) { generalRow($0) }
-                    }
-                    SettingsSection("How long they stay") {
-                        ForEach(timingRows) { generalRow($0) }
-                    }
-                    SettingsSection("Interactivity") {
-                        ForEach(rowsAfterTiming) { generalRow($0, showColumnTitle: false) }
-                    }
-                    SettingsSection(layout.fullscreenTitle.trimmingCharacters(in: CharacterSet(charactersIn: ":"))) {
-                        ForEach(layout.fullscreen) { item in
-                            Toggle(isOn: fullscreenBinding(item.id)) {
-                                Label(item.title, systemImage: item.symbol ?? "circle")
-                            }
-                            .toggleStyle(.checkbox)
+                HStack(alignment: .top, spacing: 16) {
+                    VStack(spacing: 16) {
+                        SettingsSection("Show in the notch") {
+                            ForEach(rowsBeforeTiming) { generalRow($0) }
                         }
-                        Text(layout.fullscreenCaption)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                        SettingsSection("How long they stay") {
+                            ForEach(timingRows) { generalRow($0) }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .top)
+                    VStack(spacing: 16) {
+                        SettingsSection("Interactivity") {
+                            ForEach(rowsAfterTiming) { generalRow($0, showColumnTitle: false) }
+                        }
+                        SettingsSection("Media source") {
+                            compactChoice("Media source", selection: settingsChoice("mediaSource", prefs, \.mediaSource)) {
+                                Text("System").tag("system")
+                                Text("Music").tag("music")
+                                Text("Spotify").tag("spotify")
+                            }
+                        }
+                        SettingsSection(layout.fullscreenTitle.trimmingCharacters(in: CharacterSet(charactersIn: ":"))) {
+                            ForEach(layout.fullscreen) { item in
+                                Toggle(isOn: fullscreenBinding(item.id)) {
+                                    Label(item.title, systemImage: item.symbol ?? "circle")
+                                }
+                                .toggleStyle(.checkbox)
+                            }
+                            Text(layout.fullscreenCaption)
+                                .coucouFont(11)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .top)
+                }
+                VStack(alignment: .leading, spacing: 12) {
+                    Toggle("Chin", isOn: bind(\.chinEnabled))
+                        .toggleStyle(.switch)
+                    Text("The live activity drops under the notch. Off keeps the line in the bar on every display.")
+                        .coucouFont(11)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(alignment: .top, spacing: 16) {
+                        SettingsSection("Chin") {
+                            secondChinColumn(
+                                "Chin height",
+                                value: settingsSlider("activityChinHeight", prefs, \.activityChinHeight),
+                                range: 28...80,
+                                caption: "On the main display, how far the live activity drops under the MacBook notch."
+                            )
+                            secondChinColumn(
+                                "Chin width",
+                                value: settingsSlider("activityChinWidth", prefs, \.activityChinWidth),
+                                range: 140...360,
+                                caption: "How wide that line is under the notch."
+                            )
+                        }
+                        .disabled(!prefs.chinEnabled)
+                        .frame(maxWidth: .infinity, alignment: .top)
+                        SettingsSection("Second display") {
+                            secondChinColumn(
+                                "Chin height",
+                                value: settingsSlider("activitySecondHeight", prefs, \.activitySecondHeight),
+                                range: 22...120,
+                                caption: "How tall the chin is on a display with no camera. The line stays in the bar."
+                            )
+                            secondChinColumn(
+                                "Chin width",
+                                value: settingsSlider("activityOpenWidth", prefs, \.activityOpenWidth),
+                                range: 180...480,
+                                caption: "How wide that chin is. It does not drop under a camera."
+                            )
+                        }
+                        .disabled(!prefs.chinEnabled)
+                        .frame(maxWidth: .infinity, alignment: .top)
                     }
                 }
             } else {
                 SettingsSection("Activities") {
                     Text(layout.customizeCaption)
-                        .font(.system(size: 11))
+                        .coucouFont(11)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     ForEach(layout.customize) { item in
@@ -453,7 +673,7 @@ private struct LiveActivitySettingsPane: View {
 
     private func indentedCaption(_ text: String, underTitle: Bool = false) -> some View {
         Text(text)
-            .font(.system(size: 11))
+            .coucouFont(11)
             .foregroundStyle(.secondary)
             .padding(.leading, underTitle ? layout.labelColumn + 12 : 22)
             .fixedSize(horizontal: false, vertical: true)
@@ -495,30 +715,18 @@ private struct LiveActivitySettingsPane: View {
 
 private struct NookSettingsPane: View {
     @ObservedObject private var prefs = NookPreferences.shared
-    @State private var page = 0
     @State private var selected = "calendar"
 
     var body: some View {
-        VStack(spacing: 12) {
-            Picker("Nook", selection: $page) {
-                Text("General").tag(0)
-                Text("Customize widgets").tag(1)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 20) {
+                Toggle("Enable nook", isOn: bind(\.nookEnabled))
+                Toggle("Show dividers between widgets", isOn: bind(\.widgetDividers))
+                Spacer(minLength: 12)
+                ActivePillsSettings()
             }
-            .pickerStyle(.segmented)
-            .frame(width: 280)
-
-            if page == 0 {
-                VStack(alignment: .leading, spacing: 10) {
-                    Toggle("Enable nook", isOn: bind(\.nookEnabled))
-                    caption("If disabled, clicking on the notch won't do anything.")
-                    Divider()
-                    Toggle("Show dividers between widgets", isOn: bind(\.widgetDividers))
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            } else {
-                widgetEditor
-            }
+            caption("If disabled, clicking on the notch won't do anything.")
+            widgetEditor
         }
         .padding(18)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -534,7 +742,7 @@ private struct NookSettingsPane: View {
                         VStack(alignment: .leading, spacing: 1) {
                             Text(NookWidgetInfo.title(widget.id))
                             Text(NookWidgetInfo.comingSoon(widget.id) ? "Coming soon..." : "\(Int(nookWidthReadout(id: widget.id, stored: widget.cells, contentPadding: prefs.contentPadding))) cells")
-                                .font(.system(size: 11))
+                                .coucouFont(11)
                                 .foregroundStyle(.secondary)
                         }
                         Spacer()
@@ -547,38 +755,70 @@ private struct NookSettingsPane: View {
                 .onMove { prefs.moveWidgets(from: $0, to: $1) }
             }
             .frame(width: 230)
+            .frame(maxHeight: .infinity)
 
             VStack(alignment: .leading, spacing: 14) {
                 enabledPreview
+                GeometryReader { geo in
+                    HStack(alignment: .top, spacing: 16) {
+                        ScrollView {
+                            widgetChoices
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: geo.size.height, alignment: .topLeading)
+                        widgetAdjustments
+                    }
+                    .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    /// The pick list scrolls. The sliders stay in the column on the right.
+    @ViewBuilder
+    private var widgetChoices: some View {
+        if selected == "calendar" {
+            CalendarPickSettings()
+        } else if let widget = prefs.widget(selected) {
+            Text(NookWidgetInfo.title(widget.id))
+                .coucouFont(14, weight: .semibold)
+            if NookWidgetInfo.comingSoon(widget.id) {
+                Text("Coming soon.")
+                    .foregroundStyle(.secondary)
+            } else if widget.id == "shortcuts" {
+                ShortcutPickSettings()
+            } else if widget.id == "quickApps" {
+                QuickAppPickSettings()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var widgetAdjustments: some View {
+        let showsSliders = selected == "calendar"
+            || (prefs.widget(selected).map { !NookWidgetInfo.comingSoon($0.id) } ?? false)
+        if showsSliders {
+            VStack(alignment: .leading, spacing: 12) {
                 if selected == "calendar" {
                     CalendarWidgetSettings()
                 } else if let widget = prefs.widget(selected) {
-                    Text(NookWidgetInfo.title(widget.id))
-                        .font(.system(size: 14, weight: .semibold))
-                    if NookWidgetInfo.comingSoon(widget.id) {
-                        Text("Coming soon.")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        sliderRow(
-                            "Width:",
-                            value: cellsBinding(widget.id),
-                            range: nookWidthRange(id: widget.id, contentPadding: prefs.contentPadding)
-                        )
-                        Text(nookWidthCaption)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        if widget.id == "shortcuts" {
-                            ShortcutPickSettings()
-                        }
-                        if widget.id == "quickApps" {
-                            QuickAppPickSettings()
-                        }
-                    }
+                    nookAdjustSlider(
+                        "Width:",
+                        value: cellsBinding(widget.id),
+                        range: nookWidthRange(id: widget.id, contentPadding: prefs.contentPadding)
+                    )
+                    Text(nookWidthCaption)
+                        .coucouFont(11)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                Spacer()
             }
-            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .padding(16)
+            .frame(width: 320, alignment: .topLeading)
+            .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 12))
         }
     }
 
@@ -588,7 +828,7 @@ private struct NookSettingsPane: View {
                 VStack(spacing: 4) {
                     Image(systemName: NookWidgetInfo.symbol(widget.id))
                     Text(NookWidgetInfo.title(widget.id))
-                        .font(.system(size: 11))
+                        .coucouFont(11)
                         .lineLimit(1)
                 }
                 .frame(maxWidth: .infinity)
@@ -632,9 +872,9 @@ private struct ShortcutPickSettings: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Shortcuts to show")
-                .font(.system(size: 13, weight: .semibold))
+                .coucouFont(13, weight: .semibold)
             Text("Only the shortcuts you turn on appear in the notch. None are on until you choose them.")
-                .font(.system(size: 11, weight: .regular))
+                .coucouFont(11, weight: .regular)
                 .foregroundStyle(Color.primary.opacity(0.82))
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
@@ -648,13 +888,13 @@ private struct ShortcutPickSettings: View {
                 Text(board.shortcutNote == NookShortcuts.loadFailed
                      ? NookShortcuts.loadFailed
                      : "No shortcuts on this Mac yet.")
-                    .font(.system(size: 11, weight: .regular))
+                    .coucouFont(11, weight: .regular)
                     .foregroundStyle(Color.primary.opacity(0.82))
             }
             ForEach(NookShortcuts.sections(board.shortcutCatalog)) { section in
                 if let title = section.title {
                     Text(title)
-                        .font(.system(size: 12, weight: .semibold))
+                        .coucouFont(12, weight: .semibold)
                 }
                 ForEach(section.shortcuts) { shortcut in
                     Toggle(shortcut.name, isOn: pickBinding(shortcut.identifier))
@@ -676,12 +916,11 @@ private struct ShortcutPickSettings: View {
 
 private struct CalendarWidgetSettings: View {
     @ObservedObject private var prefs = NookPreferences.shared
-    @StateObject private var model = CalendarListModel()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             if let widget = prefs.widget("calendar") {
-                sliderRow("Width:", value: Binding(
+                nookAdjustSlider("Width:", value: Binding(
                     get: { nookWidthReadout(id: "calendar", stored: widget.cells, contentPadding: prefs.contentPadding) },
                     set: { proposed in
                         guard let next = SettingsBoard.cellsFromSlider(
@@ -691,66 +930,24 @@ private struct CalendarWidgetSettings: View {
                     }
                 ), range: nookWidthRange(id: "calendar", contentPadding: prefs.contentPadding))
                 Text(nookWidthCaption)
-                    .font(.system(size: 11))
+                    .coucouFont(11)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text("Calendars to show:")
-                .font(.system(size: 13, weight: .semibold))
-            HStack {
-                Button("Select All") {
-                    prefs.enabledCalendarIDs = SettingsBoard.selectAllCalendars()
-                    prefs.persist()
-                }
-                Button("Clear") {
-                    prefs.enabledCalendarIDs = SettingsBoard.clearCalendars()
-                    prefs.persist()
-                }
-            }
-            if model.message == CalendarBehavior.message {
-                Button(model.message) {
-                    Task {
-                        if await NookBoard.shared.askForCalendar() {
-                            await model.load()
-                        }
-                    }
-                }
-                .buttonStyle(.plain)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-            } else if !model.message.isEmpty {
-                Text(model.message).font(.system(size: 11)).foregroundStyle(.secondary)
-            }
-            ForEach(model.calendars) { item in
-                Toggle(isOn: calendarBinding(item.id)) {
-                    HStack(spacing: 6) {
-                        Circle().fill(item.color).frame(width: 8, height: 8)
-                        Text(item.title)
-                    }
-                }
-            }
+            nookAdjustSlider(
+                "Number of days behind:",
+                value: settingsSlider("daysBehind", prefs, \.daysBehind),
+                range: 0...30
+            )
+            nookAdjustSlider(
+                "Number of days ahead:",
+                value: settingsSlider("daysAhead", prefs, \.daysAhead),
+                range: 0...30
+            )
             Toggle("Show today's past events", isOn: bind(\.showPastEvents))
             Toggle("Show all-day events", isOn: bind(\.showAllDayEvents))
             Toggle("Show multi-day events", isOn: bind(\.showMultiDayEvents))
-            sliderRow("Number of days behind:", value: settingsSlider("daysBehind", prefs, \.daysBehind), range: 0...30)
-            sliderRow("Number of days ahead:", value: settingsSlider("daysAhead", prefs, \.daysAhead), range: 0...30)
         }
-        .task { await model.load() }
-    }
-
-    private func calendarBinding(_ id: String) -> Binding<Bool> {
-        Binding(
-            get: {
-                guard let chosen = prefs.enabledCalendarIDs else { return true }
-                return chosen.contains(id)
-            },
-            set: { on in
-                prefs.enabledCalendarIDs = SettingsBoard.setCalendar(
-                    id, on: on, selection: prefs.enabledCalendarIDs, known: model.calendars.map(\.id)
-                )
-                prefs.persist()
-            }
-        )
     }
 
     private func bind<T>(_ path: ReferenceWritableKeyPath<NookPreferences, T>) -> Binding<T> {
@@ -765,9 +962,9 @@ private struct QuickAppPickSettings: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Apps to show")
-                .font(.system(size: 13, weight: .semibold))
+                .coucouFont(13, weight: .semibold)
             Text("Only the apps you turn on appear in the notch. None are on until you choose them.")
-                .font(.system(size: 11, weight: .regular))
+                .coucouFont(11, weight: .regular)
                 .foregroundStyle(Color.primary.opacity(0.82))
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
@@ -781,17 +978,12 @@ private struct QuickAppPickSettings: View {
                 Text(board.quickAppNote == NookQuickApps.loadFailed
                      ? NookQuickApps.loadFailed
                      : "No apps in Applications yet.")
-                    .font(.system(size: 11, weight: .regular))
+                    .coucouFont(11, weight: .regular)
                     .foregroundStyle(Color.primary.opacity(0.82))
             }
-            ScrollView {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(board.quickAppCatalog) { app in
-                        Toggle(app.name, isOn: pickBinding(app.bundleID))
-                    }
-                }
+            ForEach(board.quickAppCatalog) { app in
+                Toggle(app.name, isOn: pickBinding(app.bundleID))
             }
-            .frame(maxHeight: 220)
         }
         .task { await board.refreshQuickAppCatalog() }
     }
@@ -832,11 +1024,70 @@ private final class CalendarListModel: ObservableObject {
     }
 }
 
+private struct CalendarPickSettings: View {
+    @ObservedObject private var prefs = NookPreferences.shared
+    @StateObject private var model = CalendarListModel()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Calendars to show:")
+                .coucouFont(13, weight: .semibold)
+            HStack {
+                Button("Select All") {
+                    prefs.enabledCalendarIDs = SettingsBoard.selectAllCalendars()
+                    prefs.persist()
+                }
+                Button("Clear") {
+                    prefs.enabledCalendarIDs = SettingsBoard.clearCalendars()
+                    prefs.persist()
+                }
+            }
+            if model.message == CalendarBehavior.message {
+                Button(model.message) {
+                    Task {
+                        if await NookBoard.shared.askForCalendar() {
+                            await model.load()
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+                .coucouFont(11)
+                .foregroundStyle(.secondary)
+            } else if !model.message.isEmpty {
+                Text(model.message).coucouFont(11).foregroundStyle(.secondary)
+            }
+            ForEach(model.calendars) { item in
+                Toggle(isOn: calendarBinding(item.id)) {
+                    HStack(spacing: 6) {
+                        Circle().fill(item.color).frame(width: 8, height: 8)
+                        Text(item.title)
+                    }
+                }
+            }
+        }
+        .task { await model.load() }
+    }
+
+    private func calendarBinding(_ id: String) -> Binding<Bool> {
+        Binding(
+            get: {
+                guard let chosen = prefs.enabledCalendarIDs else { return true }
+                return chosen.contains(id)
+            },
+            set: { on in
+                prefs.enabledCalendarIDs = SettingsBoard.setCalendar(
+                    id, on: on, selection: prefs.enabledCalendarIDs, known: model.calendars.map(\.id)
+                )
+                prefs.persist()
+            }
+        )
+    }
+}
+
 // MARK: - Drop area
 
 private struct DropAreaSettingsPane: View {
     @ObservedObject private var prefs = NookPreferences.shared
-    @State private var page = 0
     @State private var tempoButton = TapTempo.Button()
     @State private var songReadout: SongReadout?
     @State private var songName = ""
@@ -850,23 +1101,15 @@ private struct DropAreaSettingsPane: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 14) {
-                Picker("Drop area", selection: $page) {
-                    Text("General").tag(0)
-                    Text("Customize pipelines").tag(1)
+                SettingsSection("Drop width") {
+                    sliderRow(
+                        "Width:",
+                        value: settingsSlider("dropAreaWidth", prefs, \.dropAreaWidth),
+                        range: 4...30,
+                        caption: "How wide the drop area is beside the notch. A higher number makes it wider. 16 by default."
+                    )
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 280)
-                if page == 0 {
-                    SettingsSection("Drop width") {
-                        sliderRow(
-                            "Width:",
-                            value: settingsSlider("dropAreaWidth", prefs, \.dropAreaWidth),
-                            range: 4...30,
-                            caption: "How wide the drop area is beside the notch. A higher number makes it wider. 16 by default."
-                        )
-                    }
-                } else {
+                HStack(alignment: .top, spacing: 16) {
                     SettingsSection("Music") {
                         checkRow(
                             title: "",
@@ -875,16 +1118,20 @@ private struct DropAreaSettingsPane: View {
                             caption: "A song dropped on the tray is added to the open Logic Pro project and split into vocals, drums, bass, guitar, piano, and the other instruments. On by default. Logic Pro has to be installed. The project that is already open stays open. Other files stay in the tray. Drag a file onto AirDrop to send it."
                         )
                         Text("The plus tab still sends a file to Mochi.")
-                            .font(.system(size: 12))
+                            .coucouFont(12)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    SettingsSection("Tempo") {
-                        tempoRow
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    VStack(alignment: .leading, spacing: 16) {
+                        SettingsSection("Tempo") {
+                            tempoRow
+                        }
+                        SettingsSection("Song info") {
+                            songInfoRow
+                        }
                     }
-                    SettingsSection("Song info") {
-                        songInfoRow
-                    }
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
             }
             .padding(22)
@@ -902,7 +1149,7 @@ private struct DropAreaSettingsPane: View {
             .buttonStyle(.borderedProminent)
             .accessibilityLabel(tempoButton.shown.map { "Tap tempo, \($0) BPM" } ?? "Tap tempo")
             Text("Tap along with the song. The tempo shows on the button after two taps. A pause starts the count over, and the last tempo stays until the next one.")
-                .font(.system(size: 11))
+                .coucouFont(11)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -917,18 +1164,18 @@ private struct DropAreaSettingsPane: View {
             }
             if !songName.isEmpty {
                 Text(songName)
-                    .font(.system(size: 11))
+                    .coucouFont(11)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             if !songNote.isEmpty {
                 Text(songNote)
-                    .font(.system(size: 11))
+                    .coucouFont(11)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Text("Drop a song on this box, or choose one. BPM, key, Camelot code, and energy show here. Nothing opens in a browser.")
-                .font(.system(size: 11))
+                .coucouFont(11)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -938,10 +1185,10 @@ private struct DropAreaSettingsPane: View {
         VStack(spacing: 8) {
             if readingSong {
                 Text("Reading the song…")
-                    .font(.system(size: 13))
+                    .coucouFont(13)
             } else {
                 Text("Drop a song here")
-                    .font(.system(size: 13, weight: .medium))
+                    .coucouFont(13, weight: .medium)
                 Button(showingChoices ? "Hide songs" : "Choose a song") {
                     if showingChoices {
                         showingChoices = false
@@ -954,7 +1201,7 @@ private struct DropAreaSettingsPane: View {
                 if showingChoices {
                     if songChoices.isEmpty {
                         Text("No songs in Music, Downloads, or the Desktop.")
-                            .font(.system(size: 12))
+                            .coucouFont(12)
                             .foregroundStyle(.secondary)
                     } else {
                         ForEach(songChoices, id: \.path) { url in
@@ -998,13 +1245,13 @@ private struct DropAreaSettingsPane: View {
     private func fact(_ value: String, _ label: String, colorHex: String? = nil) -> some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(value)
-                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                .coucouFont(17, weight: .semibold, design: .rounded)
                 .monospacedDigit()
                 .foregroundStyle(colorHex.map { Color(hex: $0) } ?? Color.primary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
             Text(label)
-                .font(.system(size: 11))
+                .coucouFont(11)
                 .foregroundStyle(.secondary)
         }
     }
@@ -1016,13 +1263,13 @@ private struct DropAreaSettingsPane: View {
                 HStack(spacing: 6) {
                     ForEach(Array(notes.enumerated()), id: \.offset) { _, note in
                         Text(note)
-                            .font(.system(size: 17, weight: .semibold, design: .rounded))
+                            .coucouFont(17, weight: .semibold, design: .rounded)
                             .foregroundStyle(Color(hex: SongFacts.noteColorHex(note)))
                             .lineLimit(1)
                     }
                 }
                 Text("Scale")
-                    .font(.system(size: 11))
+                    .coucouFont(11)
                     .foregroundStyle(.secondary)
             }
         }
@@ -1077,27 +1324,89 @@ private struct WidthSettingsPane: View {
     let iconRange: ClosedRange<Double>
 
     var body: some View {
-        VStack(spacing: 16) {
-            SettingsSection("Tray width") {
-                sliderRow(
-                    title,
-                    value: $value,
-                    range: range,
-                    caption: "How wide the tray is beside the notch. A higher number makes the tray wider. 12 by default."
-                )
+        SettingsScroller {
+            HStack(alignment: .top, spacing: 16) {
+                SettingsSection("Tray width") {
+                    fillingScale(
+                        title,
+                        value: $value,
+                        range: range,
+                        caption: "How wide the tray is beside the notch. A higher number makes the tray wider. 12 by default."
+                    )
+                }
+                .frame(maxWidth: .infinity, alignment: .top)
+                SettingsSection("Icon size") {
+                    fillingScale(
+                        "Icon size:",
+                        value: $iconValue,
+                        range: iconRange,
+                        caption: "How large each file icon is in the tray. A higher number makes the icon bigger. 100 by default."
+                    )
+                }
+                .frame(maxWidth: .infinity, alignment: .top)
             }
-            SettingsSection("Icon size") {
-                sliderRow(
-                    "Icon size:",
-                    value: $iconValue,
-                    range: iconRange,
-                    caption: "How large each file icon is in the tray. A higher number makes the icon bigger. 100 by default."
-                )
-            }
-            Spacer(minLength: 0)
+            .padding(22)
+            .frame(maxWidth: .infinity, alignment: .top)
         }
-        .padding(22)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    /// The scale uses the column. A fixed track overflowed the window as the settings font changed.
+    private func fillingScale(
+        _ title: String, value: Binding<Double>, range: ClosedRange<Double>, caption: String
+    ) -> some View {
+        let snapped = Binding<Double>(
+            get: { value.wrappedValue },
+            set: { value.wrappedValue = $0.rounded() }
+        )
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text(title)
+                    .coucouFont(13)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                Spacer(minLength: 8)
+                Text("\(Int(value.wrappedValue.rounded()))")
+                    .coucouFont(12, design: .monospaced)
+                    .lineLimit(1)
+            }
+            Slider(value: snapped, in: range)
+                .frame(maxWidth: .infinity)
+            Text(caption)
+                .coucouFont(11)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, alignment: .top)
+    }
+}
+
+private struct AboutMaintenance: View {
+    @ObservedObject private var prefs = NookPreferences.shared
+    @State private var status = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button("Reset all settings") {
+                prefs.reset()
+                status = "Notch settings reset. API keys were kept."
+            }
+            .buttonStyle(.bordered)
+            Text("This will reset the notch, gestures, activities, nook, tray, and drop area. API keys stay.")
+                .coucouFont(11)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Quit Coucou") { NSApp.terminate(nil) }
+                .buttonStyle(.bordered)
+            Text("You can also right click the menu bar icon.")
+                .coucouFont(11)
+                .foregroundStyle(.secondary)
+            if !status.isEmpty {
+                Text(status).coucouFont(11).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.top, 8)
     }
 }
 
@@ -1108,11 +1417,11 @@ private struct AboutSettingsPane: View {
         let installed = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
         VStack(alignment: .leading, spacing: 8) {
             Text("Coucou")
-                .font(.system(size: 18, weight: .semibold))
+                .coucouFont(18, weight: .semibold)
             Text("Version \(installed)")
                 .foregroundStyle(.secondary)
             Text("Notch companion. The notch, gesture, activity, nook, tray, and drop settings on the other tabs follow the same adjustments as NotchNook. Chat keys live under Keys.")
-                .font(.system(size: 12))
+                .coucouFont(12)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Text(LiveActivityBehavior.updateSentence(
@@ -1121,7 +1430,7 @@ private struct AboutSettingsPane: View {
                 checked: board.updateChecked,
                 checking: board.updateChecking
             ))
-            .font(.system(size: 11))
+            .coucouFont(11)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
             Button("Check for a newer version") { board.checkForUpdate() }
@@ -1130,9 +1439,10 @@ private struct AboutSettingsPane: View {
                 Button("Open the release page") { board.openReleasePage() }
             }
             Text("Looks up the published Coucou release and does not download it. Coucou checks once when it opens, and again when you press this.")
-                .font(.system(size: 11))
+                .coucouFont(11)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            AboutMaintenance()
             Spacer()
         }
         .padding(28)
@@ -1147,7 +1457,7 @@ private func compactChoice<Content: View>(
 ) -> some View where Content: View {
     VStack(alignment: .leading, spacing: 4) {
         Text(title)
-            .font(.system(size: 12))
+            .coucouFont(12)
         Picker(title, selection: selection, content: content)
             .labelsHidden()
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1161,19 +1471,23 @@ private func compactSlider(_ title: String, value: Binding<Double>, range: Close
     )
     return HStack(spacing: 8) {
         Text(title)
-            .font(.system(size: 12))
-            .frame(width: 108, alignment: .leading)
+            .coucouFont(12)
+            .lineLimit(2)
+            .frame(width: max(88, settingsBox(108)), alignment: .leading)
         Slider(value: snapped, in: range)
         Text("\(Int(value.wrappedValue.rounded()))")
-            .font(.system(size: 12, design: .monospaced))
-            .frame(width: 32, alignment: .trailing)
+            .coucouFont(12, design: .monospaced)
+            .lineLimit(1)
+            .frame(width: max(32, settingsBox(36)), alignment: .trailing)
     }
 }
 
 private func labeledRow<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
     HStack(alignment: .firstTextBaseline, spacing: 12) {
         Text(title)
-            .frame(width: 210, alignment: .trailing)
+            .lineLimit(2)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(width: max(160, settingsBox(210)), alignment: .trailing)
         content()
         Spacer(minLength: 0)
     }
@@ -1184,16 +1498,18 @@ private func checkRow(title: String, _ label: String, _ isOn: Binding<Bool>, cap
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             if !title.isEmpty {
                 Text(title)
-                    .frame(width: 210, alignment: .trailing)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(width: max(160, settingsBox(210)), alignment: .trailing)
             }
             Toggle(label, isOn: isOn)
             Spacer(minLength: 0)
         }
         if let caption {
             Text(caption)
-                .font(.system(size: 11))
+                .coucouFont(11)
                 .foregroundStyle(.secondary)
-                .padding(.leading, title.isEmpty ? 22 : 222)
+                .padding(.leading, title.isEmpty ? 22 : max(160, settingsBox(210)) + 12)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -1236,6 +1552,57 @@ private func settingsChoice(
     )
 }
 
+/// One chin scale. It fills the column it sits in.
+private func secondChinColumn(
+    _ title: String, value: Binding<Double>, range: ClosedRange<Double>, caption: String
+) -> some View {
+    let snapped = Binding<Double>(
+        get: { value.wrappedValue },
+        set: { value.wrappedValue = $0.rounded() }
+    )
+    return VStack(alignment: .leading, spacing: 6) {
+        HStack(spacing: 8) {
+            Text(title)
+                .coucouFont(13)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            Text("\(Int(value.wrappedValue.rounded()))")
+                .coucouFont(12, design: .monospaced)
+                .lineLimit(1)
+        }
+        Slider(value: snapped, in: range)
+        Text(caption)
+            .coucouFont(11)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+    .frame(maxWidth: .infinity, alignment: .top)
+}
+
+/// A slider that fits the Nook adjustment column. The label and value share one line.
+private func nookAdjustSlider(
+    _ title: String, value: Binding<Double>, range: ClosedRange<Double>
+) -> some View {
+    let snapped = Binding<Double>(
+        get: { value.wrappedValue },
+        set: { value.wrappedValue = $0.rounded() }
+    )
+    return VStack(alignment: .leading, spacing: 4) {
+        HStack(spacing: 8) {
+            Text(title)
+                .coucouFont(13)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            Text("\(Int(value.wrappedValue.rounded()))")
+                .coucouFont(12, design: .monospaced)
+                .lineLimit(1)
+        }
+        Slider(value: snapped, in: range)
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+}
+
 private func sliderRow(
     _ title: String, value: Binding<Double>, range: ClosedRange<Double>, caption: String? = nil
 ) -> some View {
@@ -1243,34 +1610,41 @@ private func sliderRow(
         get: { value.wrappedValue },
         set: { value.wrappedValue = $0.rounded() }
     )
+    let labelWidth = max(140, settingsBox(180))
+    let valueWidth = max(36, settingsBox(36))
     return VStack(spacing: 4) {
         HStack(spacing: 12) {
             Spacer(minLength: SettingsPage.scaleInset)
             Text(title)
+                .coucouFont(13)
                 .multilineTextAlignment(.trailing)
-                .frame(width: 180, alignment: .trailing)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(width: labelWidth, alignment: .trailing)
             Color.clear
-                .frame(width: SettingsPage.scaleTrack, height: 28)
+                .frame(width: SettingsPage.scaleTrack, height: max(28, settingsBox(28)))
                 .overlay {
                     Slider(value: snapped, in: range)
                 }
                 .clipped()
             Text("\(Int(value.wrappedValue.rounded()))")
-                .font(.system(size: 12, design: .monospaced))
-                .frame(width: 36, alignment: .trailing)
+                .coucouFont(12, design: .monospaced)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .frame(width: valueWidth, alignment: .trailing)
             Spacer(minLength: SettingsPage.scaleInset)
         }
         if let caption {
             HStack(spacing: 12) {
                 Spacer(minLength: SettingsPage.scaleInset)
-                Color.clear.frame(width: 180)
+                Color.clear.frame(width: labelWidth)
                 Text(caption)
-                    .font(.system(size: 11))
+                    .coucouFont(11)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .frame(width: SettingsPage.scaleTrack)
                     .fixedSize(horizontal: false, vertical: true)
-                Color.clear.frame(width: 36)
+                Color.clear.frame(width: valueWidth)
                 Spacer(minLength: SettingsPage.scaleInset)
             }
         }
@@ -1302,7 +1676,7 @@ private struct SettingsSection<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(.system(size: 13, weight: .semibold))
+                .coucouFont(13, weight: .semibold)
             VStack(alignment: .leading, spacing: 12) {
                 content()
             }
@@ -1316,7 +1690,7 @@ private struct SettingsSection<Content: View>: View {
 
 private func caption(_ text: String) -> some View {
     Text(text)
-        .font(.system(size: 11))
+        .coucouFont(11)
         .foregroundStyle(.secondary)
         .fixedSize(horizontal: false, vertical: true)
 }

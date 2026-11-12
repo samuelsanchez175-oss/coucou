@@ -199,7 +199,8 @@ enum UsageBehaviorTests {
     static func testStackSitsUnderTheBlob() {
         let blobCenterY = TerminalBehavior.overviewBlobCenterY - TerminalBehavior.menuBarHeaderBand
         let blobBottom = blobCenterY + UsageBehavior.blobDiameter / 2
-        precondition(UsageBehavior.stackTop >= blobBottom + 2, "the rings start under the blob")
+        precondition(UsageBehavior.blobPad >= 10, "the top usage row stays clear of the white blob")
+        precondition(UsageBehavior.stackTop >= blobBottom + 2 + UsageBehavior.blobPad, "the rings start under the blob")
         precondition(UsageBehavior.shelfClearance == UsageBehavior.playerRow + UsageBehavior.playerGap + UsageBehavior.playerBottom,
                      "the player band is the row, the gap, and the pad under it")
         precondition(UsageBehavior.playerGap >= 12, "the player title needs air under the last usage row")
@@ -298,6 +299,13 @@ enum UsageBehaviorTests {
         )
         precondition(UsageBehavior.rowListHeight(rowCount: 18) <= UsageBehavior.rowViewport + 0.5)
         precondition(UsageBehavior.rowListHeight(rowCount: 3) + 0.5 >= UsageBehavior.row * 3)
+        precondition(TerminalBehavior.homePlayerDrop == UsageBehavior.shelfClearance,
+                     "the open drawer includes the player band, so the band does not cut a usage row")
+        let sliced = UsageBehavior.rowListHeight(rowCount: 6, offered: 125)
+        precondition(abs(sliced - UsageBehavior.row * 5) < 0.5,
+                     "a short list shows five whole rows, not a sliced sixth")
+        let six = UsageBehavior.rowListHeight(rowCount: 6, offered: UsageBehavior.row * 6)
+        precondition(abs(six - UsageBehavior.row * 6) < 0.5, "six rows stay whole when they fit")
         let openRoom: CGFloat = 420
         let opened = UsageBehavior.rowListHeight(rowCount: 18, offered: openRoom)
         precondition(opened + 0.5 >= UsageBehavior.row * 18, "a tall card shows the rows the short cap hid")
