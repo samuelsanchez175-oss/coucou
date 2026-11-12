@@ -1,6 +1,9 @@
 import CommonCrypto
 import Darwin
 import Foundation
+#if canImport(WidgetKit)
+import WidgetKit
+#endif
 
 /// Reads what is left of Claude, Grok, ChatGPT, Antigravity, and Grok Bot. A miss stays blank.
 @MainActor
@@ -115,6 +118,34 @@ enum UsageLimitStore {
         guard let data = try? JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted]) else { return }
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? data.write(to: url, options: .atomic)
+        writeSnapshot(readings)
+    }
+
+    /// Mirror the readings into the App Group container so the Mac widget can read them,
+    /// then ask WidgetKit to refresh its timelines.
+    private static func writeSnapshot(_ readings: [UsageService: UsageLevels]) {
+        let services: [UsageSnapshot.Service] = UsageBehavior.services.compactMap { service in
+            guard let levels = readings[service], levels.hasReading else { return nil }
+            let gates = levels.gates.map { gate in
+                UsageSnapshot.Gate(
+                    model: gate.model,
+                    window: gate.window,
+                    remaining: gate.remaining,
+                    replenishes: gate.replenishes,
+                    savedAt: gate.savedAt
+                )
+            }
+            return UsageSnapshot.Service(
+                id: service.rawValue,
+                title: service.title,
+                brandHex: service.brandHex,
+                gates: gates
+            )
+        }
+        UsageSnapshot(updatedAt: Date(), services: services).write()
+        #if canImport(WidgetKit)
+        WidgetCenter.shared.reloadTimelines(ofKind: UsageSnapshot.widgetKind)
+        #endif
     }
 
     static func fileURL() -> URL? {
@@ -151,7 +182,86 @@ enum UsageFetcher {
         case .chatgpt: return await chatGPT()
         case .antigravity: return await antigravity()
         case .grokbot: return await grokbot()
+        case .codex: return await codex()
+        case .cursor: return await cursor()
         }
+    }
+
+    /// Cursor plan. Reads the user's WorkOS session cookie from Cursor's
+    /// Chromium cookie DB (decrypted with the `Cursor Safe Storage` keychain
+    /// password) and hits `/api/auth/me` + `/api/usage` on cursor.com.
+    static func cursor() async -> UsageLevels? {
+        guard let token = cursorSessionCookie() else { return nil }
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.finishTasksAndInvalidate() }
+        guard let userId = await cursorUserId(token: token, session: session) else { return nil }
+        guard var components = URLComponents(string: "https://www.cursor.com/api/usage") else { return nil }
+        components.queryItems = [URLQueryItem(name: "user", value: userId)]
+        guard let url = components.url else { return nil }
+        var request = URLRequest(url: url)
+        request.setValue("WorkosCursorSessionToken=\(token)", forHTTPHeaderField: "Cookie")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        guard let data = await body(for: request, session: session) else { return nil }
+        let levels = UsageBehavior.parseCursor(data)
+        return levels.hasReading ? levels : nil
+    }
+
+    private static func cursorUserId(token: String, session: URLSession) async -> String? {
+        guard let url = URL(string: "https://www.cursor.com/api/auth/me") else { return nil }
+        var request = URLRequest(url: url)
+        request.setValue("WorkosCursorSessionToken=\(token)", forHTTPHeaderField: "Cookie")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        guard let data = await body(for: request, session: session),
+              let root = json(data) else { return nil }
+        return (root["sub"] as? String) ?? (root["userId"] as? String) ?? (root["id"] as? String)
+    }
+
+    /// Decrypted value of the `WorkosCursorSessionToken` cookie, or nil when Cursor
+    /// is missing, logged out, or the Safe Storage password cannot be read.
+    private static func cursorSessionCookie() -> String? {
+        let password = shell("/usr/bin/security", ["find-generic-password", "-s", "Cursor Safe Storage", "-w"])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !password.isEmpty else { return nil }
+        let dbPath = home.appendingPathComponent("Library/Application Support/Cursor/Cookies").path
+        guard FileManager.default.fileExists(atPath: dbPath) else { return nil }
+        let hex = shell("/usr/bin/sqlite3", [
+            dbPath,
+            "SELECT hex(encrypted_value) FROM cookies WHERE host_key LIKE '%cursor.com' AND name='WorkosCursorSessionToken' ORDER BY expires_utc DESC LIMIT 1;",
+        ]).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !hex.isEmpty, let blob = Data(hexString: hex), blob.count > 3 else { return nil }
+        return decryptSafeStorage(blob.base64EncodedString(), password: password)
+    }
+
+    /// Codex plan: runs the local `codex app-server` and reads `account/rateLimits/read`.
+    /// Skipped on the App Store build, which cannot spawn processes.
+    static func codex() async -> UsageLevels? {
+        #if APPSTORE
+        return nil
+        #else
+        guard let usage = await CodexPlanGauge.fetch() else { return nil }
+        let saved = Date()
+        var gates: [UsageGate] = []
+        if let window = usage.fiveHour {
+            gates.append(UsageGate(
+                model: "Codex",
+                window: "5 hours",
+                remaining: 100 - Int(window.usedPct.rounded()),
+                replenishes: window.resetsAt,
+                savedAt: saved
+            ))
+        }
+        if let window = usage.sevenDay {
+            gates.append(UsageGate(
+                model: "Codex",
+                window: "Week",
+                remaining: 100 - Int(window.usedPct.rounded()),
+                replenishes: window.resetsAt,
+                savedAt: saved
+            ))
+        }
+        let levels = UsageLevels(gates: gates)
+        return levels.hasReading ? levels : nil
+        #endif
     }
 
     static func claude() async -> UsageLevels? {
@@ -489,6 +599,25 @@ enum UsageFetcher {
         }
         guard process.terminationStatus == 0 else { return "" }
         return String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    }
+}
+
+private extension Data {
+    /// Decodes a `sqlite3 hex()` blob — SQLite returns uppercase hex with no prefix.
+    init?(hexString: String) {
+        let cleaned = hexString.unicodeScalars.filter { !CharacterSet.whitespacesAndNewlines.contains($0) }
+        let digits = String(String.UnicodeScalarView(cleaned))
+        guard !digits.isEmpty, digits.count.isMultiple(of: 2) else { return nil }
+        var bytes = [UInt8]()
+        bytes.reserveCapacity(digits.count / 2)
+        var index = digits.startIndex
+        while index < digits.endIndex {
+            let next = digits.index(index, offsetBy: 2)
+            guard let byte = UInt8(digits[index..<next], radix: 16) else { return nil }
+            bytes.append(byte)
+            index = next
+        }
+        self = Data(bytes)
     }
 }
 

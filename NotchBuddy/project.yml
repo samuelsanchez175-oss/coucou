@@ -118,6 +118,7 @@ targets:
           - "Phone/**"
           - "Widgets/**"
           - "NotificationContent/**"
+          - "MacWidgets/**"
       - path: Assets.xcassets
         buildPhase: resources
       - path: Resources/sounds
@@ -146,6 +147,7 @@ targets:
         NSScreenCaptureUsageDescription: "Coucou shows the playing video in a floating picture on the desktop you are already using."
         NSBluetoothAlwaysUsageDescription: "Coucou shows a connected Bluetooth device in the notch."
         NSMicrophoneUsageDescription: "Coucou uses the microphone when you dictate a message in the chat."
+        NSAudioCaptureUsageDescription: "Coucou draws the notch waveform from the sound that is playing."
         NSSpeechRecognitionUsageDescription: "Coucou turns your voice into the text of a chat message."
         NSContactsUsageDescription: "Coucou looks up an email address when you ask it, by voice, to prepare an email."
         NSAppTransportSecurity:
@@ -199,6 +201,7 @@ targets:
     platform: macOS
     dependencies:
       - sdk: IOBluetooth.framework
+      - target: CoucouMacWidgets
     sources:
       - path: Sources
         type: group
@@ -206,6 +209,7 @@ targets:
           - "Phone/**"
           - "Widgets/**"
           - "NotificationContent/**"
+          - "MacWidgets/**"
       - path: Assets.xcassets
         buildPhase: resources
       - path: Resources/sounds
@@ -448,3 +452,46 @@ targets:
         OTHER_CODE_SIGN_FLAGS: ""
         SKIP_INSTALL: YES
         APPLICATION_EXTENSION_API_ONLY: YES
+
+  # Mac widget: shows what is left of each AI plan on the Home Screen /
+  # Notification Center. Embedded in the Mac App Store build. Reads the
+  # snapshot the Mac app writes to the App Group after every poll.
+  CoucouMacWidgets:
+    type: app-extension
+    platform: macOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: Sources/MacWidgets
+        type: group
+      - path: Sources/CoucouKit
+        type: group
+      # Stubs for the Mac-only types CoucouKit references (SoundEngine,
+      # botDizzy). TerminalBehavior has its own widget stub in MacWidgets/.
+      - path: Sources/Phone/MacStubs.swift
+    info:
+      path: Resources/InfoMacWidgets.plist
+      properties:
+        CFBundleName: CoucouMacWidgets
+        CFBundleDisplayName: Coucou Usage
+        CFBundleIdentifier: fr.louisraille.Coucou.MacWidgets
+        CFBundleVersion: "1"
+        CFBundleShortVersionString: "1.0"
+        CFBundlePackageType: XPC!
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: fr.louisraille.Coucou.MacWidgets
+        PRODUCT_NAME: CoucouMacWidgets
+        INFOPLIST_FILE: Resources/InfoMacWidgets.plist
+        MACOSX_DEPLOYMENT_TARGET: "15.0"
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "Apple Development"
+        CODE_SIGN_ENTITLEMENTS: Resources/CoucouMacWidgets.entitlements
+        DEVELOPMENT_TEAM: 256AUJ9555
+        CODE_SIGNING_REQUIRED: YES
+        CODE_SIGNING_ALLOWED: YES
+        ENABLE_HARDENED_RUNTIME: YES
+        SKIP_INSTALL: YES
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) WIDGET_EXTENSION"

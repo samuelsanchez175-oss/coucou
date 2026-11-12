@@ -24,5 +24,9 @@
     <string>Production</string>
     <key>com.apple.developer.aps-environment</key>
     <string>production</string>
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>group.fr.louisraille.Coucou</string>
+    </array>
 </dict>
 </plist>

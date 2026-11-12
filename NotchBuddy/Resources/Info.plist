@@ -46,6 +46,8 @@
 	<string>Coucou asks Chrome or Safari to float the playing video, asks Terminal to run a line, and asks Logic Pro to split a song into stems.</string>
 	<key>NSAppleMusicUsageDescription</key>
 	<string>Coucou shows the song or video that is playing, including from Chrome, in the notch.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Coucou draws the notch waveform from the sound that is playing.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Coucou shows a connected Bluetooth device in the notch.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
@@ -56,14 +58,12 @@
 	<string>Coucou shows your front camera in the Mirror circle.</string>
 	<key>NSContactsUsageDescription</key>
 	<string>Coucou looks up an email address when you ask it, by voice, to prepare an email.</string>
-	<key>NSScreenCaptureUsageDescription</key>
-	<string>Coucou shows the playing video in a floating picture on the desktop you are already using.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Coucou uses the microphone when you dictate a message in the chat.</string>
-	<key>NSAudioCaptureUsageDescription</key>
-	<string>Coucou draws the notch waveform from the sound that is playing.</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>Coucou shows the playing video in a floating picture on the desktop you are already using.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Coucou turns your voice into the text of a chat message.</string>
 	<key>NSSupportsAutomaticGraphicsSwitching</key>

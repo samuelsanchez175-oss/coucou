@@ -2,7 +2,7 @@ import Foundation
 
 /// One service under the home blob. The row names the model. Each ring is one real gate.
 enum UsageService: String, CaseIterable, Equatable {
-    case claude, grok, chatgpt, antigravity, grokbot
+    case claude, grok, chatgpt, antigravity, grokbot, codex, cursor
 
     var title: String {
         switch self {
@@ -11,10 +11,12 @@ enum UsageService: String, CaseIterable, Equatable {
         case .chatgpt: return "ChatGPT"
         case .antigravity: return "Antigravity"
         case .grokbot: return "Grok Bot"
+        case .codex: return "Codex"
+        case .cursor: return "Cursor"
         }
     }
 
-    /// Claude coral, Grok white, ChatGPT green, Antigravity blue, Grok Bot silver.
+    /// Claude coral, Grok white, ChatGPT green, Antigravity blue, Grok Bot silver, Codex graphite, Cursor violet.
     var brandHex: String {
         switch self {
         case .claude: return "#D97757"
@@ -22,6 +24,8 @@ enum UsageService: String, CaseIterable, Equatable {
         case .chatgpt: return "#10A37F"
         case .antigravity: return "#4285F4"
         case .grokbot: return "#C8CCD6"
+        case .codex: return "#8E8E93"
+        case .cursor: return "#8B5CF6"
         }
     }
 }
@@ -53,7 +57,7 @@ struct UsageRow: Equatable, Identifiable {
 
 /// Remaining-limit math and where the rows sit under the white blob.
 enum UsageBehavior {
-    static let services = [UsageService.claude, .grok, .chatgpt, .antigravity, .grokbot]
+    static let services = [UsageService.claude, .grok, .chatgpt, .antigravity, .grokbot, .codex, .cursor]
     static let ring: CGFloat = 18
     static let gap: CGFloat = 0
     /// Date on one line, time on the next. Tall enough for both at 10pt.
@@ -406,6 +410,32 @@ enum UsageBehavior {
             append(&gates, model: "Grok Bot", window: "Named models", used: field(plan, key: "apiPercentUsed"))
         }
         return UsageLevels(gates: gates)
+    }
+
+    /// Cursor's web dashboard. `gpt-4` (fast / premium) is the only model with a hard
+    /// cap; the others return `maxRequestUsage: null`, which we treat as "unlimited".
+    static func parseCursor(_ data: Data, now: Date = Date()) -> UsageLevels {
+        guard let root = json(data) else { return UsageLevels() }
+        var gates: [UsageGate] = []
+        if let gpt4 = root["gpt-4"] as? [String: Any],
+           let numRequests = field(gpt4, key: "numRequests"),
+           let maxRequests = field(gpt4, key: "maxRequestUsage"),
+           maxRequests > 0 {
+            let used = min(100, (numRequests / maxRequests) * 100)
+            let reset = monthlyReset(root["startOfMonth"], now: now)
+            append(&gates, model: "Premium", window: "Month", used: used, replenishes: reset)
+        }
+        return UsageLevels(gates: gates)
+    }
+
+    /// Cursor refills exactly one month after `startOfMonth`.
+    private static func monthlyReset(_ raw: Any?, now: Date) -> Date? {
+        guard let text = raw as? String else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let start = formatter.date(from: text) ?? ISO8601DateFormatter().date(from: text)
+        guard let start else { return nil }
+        return Calendar(identifier: .gregorian).date(byAdding: .month, value: 1, to: start)
     }
 
     static func remaining(usedPercent: Double) -> Int {
