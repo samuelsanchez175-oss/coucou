@@ -58,26 +58,58 @@ public extension UsageSnapshot {
     /// Widget kind, used by `WidgetCenter.shared.reloadAllTimelines(ofKind:)`.
     static let widgetKind = "CoucouMacUsage"
 
-    static func containerURL() -> URL? {
-        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupID)?
-            .appendingPathComponent(fileName)
+    /// Every location the snapshot may live at, in read order. The app writes
+    /// to all writable ones; the widget reads the newest existing file. Both
+    /// paths exist so adhoc / local-dev builds work even when the App Group
+    /// container is not resolvable.
+    static func candidateURLs() -> [URL] {
+        var urls: [URL] = []
+        if let group = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupID) {
+            urls.append(group.appendingPathComponent(fileName))
+        }
+        // The widget runs sandboxed, so `urls(for: .applicationSupportDirectory …)`
+        // returns its OWN container. Resolve the real user home through getpwuid
+        // so a Developer-ID dev build with a temp-exception entitlement can
+        // reach the snapshot the main app writes to ~/Library/Application Support.
+        if let realHome = realUserHome() {
+            urls.append(URL(fileURLWithPath: realHome)
+                .appendingPathComponent("Library/Application Support/Coucou", isDirectory: true)
+                .appendingPathComponent(fileName))
+        }
+        return urls
     }
 
+    private static func realUserHome() -> String? {
+        guard let pw = getpwuid(getuid()) else { return nil }
+        return String(cString: pw.pointee.pw_dir)
+    }
+
+    static func containerURL() -> URL? { candidateURLs().first }
+
     static func load() -> UsageSnapshot? {
-        guard let url = containerURL(),
-              let data = try? Data(contentsOf: url) else { return nil }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .secondsSince1970
-        return try? decoder.decode(UsageSnapshot.self, from: data)
+        // Return the newest readable snapshot across all candidate locations.
+        var newest: (date: Date, snapshot: UsageSnapshot)?
+        for url in candidateURLs() {
+            guard let data = try? Data(contentsOf: url),
+                  let snap = try? decoder.decode(UsageSnapshot.self, from: data) else { continue }
+            if newest == nil || snap.updatedAt > newest!.date {
+                newest = (snap.updatedAt, snap)
+            }
+        }
+        return newest?.snapshot
     }
 
     func write() {
-        guard let url = Self.containerURL() else { return }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .secondsSince1970
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if let data = try? encoder.encode(self) {
+        guard let data = try? encoder.encode(self) else { return }
+        // Write to every candidate location so whichever one the widget's
+        // sandbox can reach has a fresh snapshot.
+        for url in Self.candidateURLs() {
+            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? data.write(to: url, options: .atomic)
         }
     }

@@ -23,8 +23,10 @@ final class UsageMonitor: ObservableObject {
         readings = UsageLimitStore.load()
         if readings[.claude]?.hasReading != true, let history = UsageFetcher.claudeHistory() {
             readings[.claude] = history
-            UsageLimitStore.save(readings)
         }
+        // Always mirror the on-disk readings into the App Group snapshot so the
+        // Mac widget has something to show before the first refresh lands.
+        UsageLimitStore.save(readings)
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 120, repeats: true) { _ in
             Task { @MainActor in UsageMonitor.shared.refresh() }

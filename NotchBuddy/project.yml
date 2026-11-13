@@ -111,6 +111,7 @@ targets:
     platform: macOS
     dependencies:
       - sdk: IOBluetooth.framework
+      - target: CoucouMacWidgetsDev
     sources:
       - path: Sources
         type: group
@@ -495,3 +496,62 @@ targets:
         SKIP_INSTALL: YES
         APPLICATION_EXTENSION_API_ONLY: YES
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) WIDGET_EXTENSION"
+
+  # Same widget, re-targeted at the Developer-ID `NotchBuddy` host. Apple
+  # requires an extension's bundle id to start with its host app's bundle id,
+  # so the App Store build and the dev build need their own widget targets
+  # even though the sources are identical.
+  CoucouMacWidgetsDev:
+    type: app-extension
+    platform: macOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: Sources/MacWidgets
+        type: group
+      - path: Sources/CoucouKit
+        type: group
+      - path: Sources/Phone/MacStubs.swift
+    info:
+      path: Resources/InfoMacWidgetsDev.plist
+      properties:
+        CFBundleName: CoucouMacWidgetsDev
+        CFBundleDisplayName: Coucou Usage
+        CFBundleIdentifier: fr.louisraille.NotchBuddy.MacWidgets
+        CFBundleVersion: "1"
+        CFBundleShortVersionString: "1.0"
+        CFBundlePackageType: XPC!
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: fr.louisraille.NotchBuddy.MacWidgets
+        PRODUCT_NAME: CoucouMacWidgetsDev
+        INFOPLIST_FILE: Resources/InfoMacWidgetsDev.plist
+        MACOSX_DEPLOYMENT_TARGET: "15.0"
+        CODE_SIGN_ENTITLEMENTS: Resources/CoucouMacWidgetsDev.entitlements
+        SKIP_INSTALL: YES
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) WIDGET_EXTENSION"
+      configs:
+        DebugCloud:
+          CODE_SIGN_STYLE: Automatic
+          CODE_SIGN_IDENTITY: "Apple Development"
+          DEVELOPMENT_TEAM: 256AUJ9555
+          CODE_SIGNING_REQUIRED: YES
+          CODE_SIGNING_ALLOWED: YES
+        Release:
+          CODE_SIGN_IDENTITY: "Developer ID Application"
+          DEVELOPMENT_TEAM: 256AUJ9555
+          OTHER_CODE_SIGN_FLAGS: "--timestamp"
+          CODE_SIGNING_REQUIRED: YES
+          CODE_SIGNING_ALLOWED: YES
+          ENABLE_HARDENED_RUNTIME: YES
+          PROVISIONING_PROFILE_SPECIFIER: "Coucou Developer ID"
+        ReleaseCloud:
+          CODE_SIGN_IDENTITY: "Developer ID Application"
+          DEVELOPMENT_TEAM: 256AUJ9555
+          OTHER_CODE_SIGN_FLAGS: "--timestamp"
+          CODE_SIGNING_REQUIRED: YES
+          CODE_SIGNING_ALLOWED: YES
+          ENABLE_HARDENED_RUNTIME: YES
+          PROVISIONING_PROFILE_SPECIFIER: "Coucou Developer ID"

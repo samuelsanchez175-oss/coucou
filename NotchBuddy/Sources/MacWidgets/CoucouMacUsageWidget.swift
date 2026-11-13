@@ -34,8 +34,6 @@ struct UsageTimelineProvider: TimelineProvider {
         let snap = UsageSnapshot.load()
         let entry = UsageEntry(date: .now, snapshot: snap ?? UsageSnapshot(updatedAt: .now, services: []),
                                placeholder: snap == nil)
-        // The main app calls `WidgetCenter.reloadAllTimelines` after every save,
-        // so this 15-minute refresh is only a safety net.
         completion(Timeline(entries: [entry], policy: .after(Date().addingTimeInterval(15 * 60))))
     }
 }
@@ -63,14 +61,44 @@ struct UsageView: View {
         case .systemSmall:
             SmallView(snapshot: entry.snapshot, placeholder: entry.placeholder)
         case .systemMedium:
-            MediumView(snapshot: entry.snapshot, placeholder: entry.placeholder)
+            GridView(snapshot: entry.snapshot, placeholder: entry.placeholder, maxRows: 4, compact: true)
         default:
-            LargeView(snapshot: entry.snapshot, placeholder: entry.placeholder)
+            GridView(snapshot: entry.snapshot, placeholder: entry.placeholder, maxRows: 8, compact: false)
         }
     }
 }
 
-// MARK: - Small
+// MARK: - Column picking
+
+/// Pick up to two window strings to use as grid columns: the two most common
+/// windows across services, ordered shortest first.
+private func pickColumns(_ snapshot: UsageSnapshot) -> [String] {
+    var counts: [String: Int] = [:]
+    for service in snapshot.services {
+        for gate in service.gates {
+            counts[gate.window, default: 0] += 1
+        }
+    }
+    let sorted = counts.sorted { (a, b) in
+        if a.value != b.value { return a.value > b.value }
+        return windowRank(a.key) < windowRank(b.key)
+    }
+    let top = Array(sorted.prefix(2))
+    return top.sorted { windowRank($0.key) < windowRank($1.key) }.map(\.key)
+}
+
+/// Rough ordering so "5 hours" lands left of "Week".
+private func windowRank(_ w: String) -> Int {
+    let lower = w.lowercased()
+    if lower.contains("minute") { return 0 }
+    if lower.contains("hour") { return 1 }
+    if lower.contains("day") { return 2 }
+    if lower.contains("week") { return 3 }
+    if lower.contains("month") { return 4 }
+    return 5
+}
+
+// MARK: - Small (lowest)
 
 private struct SmallView: View {
     let snapshot: UsageSnapshot
@@ -118,100 +146,119 @@ private struct SmallView: View {
     }
 }
 
-// MARK: - Medium
+// MARK: - Grid (Medium + Large)
 
-private struct MediumView: View {
+private struct GridView: View {
     let snapshot: UsageSnapshot
     let placeholder: Bool
+    let maxRows: Int
+    let compact: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("AI Usage")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        let cols = pickColumns(snapshot)
+        VStack(alignment: .leading, spacing: compact ? 4 : 6) {
+            HeaderRow(cols: cols, compact: compact)
             if snapshot.services.isEmpty {
                 Text("No data yet")
-                    .font(.subheadline)
+                    .font(.footnote)
                     .foregroundStyle(.secondary)
             }
-            ForEach(snapshot.services.prefix(5)) { service in
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(Color(hex: service.brandHex))
-                        .frame(width: 8, height: 8)
-                    Text(service.title)
-                        .font(.subheadline)
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
-                    Text(service.worstRemaining.map { "\($0)%" } ?? "—")
-                        .font(.subheadline.monospacedDigit())
-                        .foregroundStyle(remainingColor(service.worstRemaining))
-                }
+            ForEach(snapshot.services.prefix(maxRows)) { service in
+                ServiceRow(service: service, cols: cols, compact: compact)
             }
             Spacer(minLength: 0)
         }
-        .padding(12)
+        .padding(compact ? 10 : 12)
         .foregroundStyle(.white)
         .redacted(reason: placeholder ? .placeholder : [])
     }
 }
 
-// MARK: - Large
-
-private struct LargeView: View {
-    let snapshot: UsageSnapshot
-    let placeholder: Bool
+private struct HeaderRow: View {
+    let cols: [String]
+    let compact: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("AI Usage")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text(snapshot.updatedAt, style: .time)
+        HStack(spacing: 6) {
+            Spacer()
+                .frame(width: nameColumnWidth(compact: compact))
+            ForEach(cols, id: \.self) { col in
+                Text(col)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
             }
-            if snapshot.services.isEmpty {
-                Text("Open Coucou once to pull your limits.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+            // Keep space empty when fewer than two columns are known.
+            ForEach(0..<(2 - cols.count), id: \.self) { _ in
+                Spacer().frame(maxWidth: .infinity)
             }
-            ForEach(snapshot.services) { service in
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(Color(hex: service.brandHex))
-                            .frame(width: 8, height: 8)
-                        Text(service.title)
-                            .font(.subheadline.weight(.semibold))
-                    }
-                    ForEach(service.gates) { gate in
-                        HStack {
-                            Text(gate.window)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            if let remaining = gate.remaining {
-                                Text("\(remaining)%")
-                                    .font(.caption.monospacedDigit())
-                                    .foregroundStyle(remainingColor(remaining))
-                            } else {
-                                Text("—")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
+        }
+    }
+}
+
+private struct ServiceRow: View {
+    let service: UsageSnapshot.Service
+    let cols: [String]
+    let compact: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(Color(hex: service.brandHex))
+                    .frame(width: 7, height: 7)
+                Text(service.title)
+                    .font(compact ? .caption : .footnote.weight(.medium))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                Spacer(minLength: 0)
+            }
+            .frame(width: nameColumnWidth(compact: compact), alignment: .leading)
+
+            ForEach(cols, id: \.self) { col in
+                GateCell(gate: service.gates.first { $0.window == col }, hex: service.brandHex, compact: compact)
+                    .frame(maxWidth: .infinity)
+            }
+            ForEach(0..<(2 - cols.count), id: \.self) { _ in
+                Spacer().frame(maxWidth: .infinity)
+            }
+        }
+    }
+}
+
+private struct GateCell: View {
+    let gate: UsageSnapshot.Gate?
+    let hex: String
+    let compact: Bool
+
+    var body: some View {
+        if let gate, let remaining = gate.remaining {
+            HStack(spacing: 6) {
+                MeterRing(remaining: remaining, hex: hex)
+                    .frame(width: compact ? 26 : 32, height: compact ? 26 : 32)
+                if !compact, let replenishes = gate.replenishes {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(replenishes, format: .dateTime.month(.abbreviated).day())
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        Text(replenishes, format: .dateTime.hour().minute())
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
                     }
                 }
             }
-            Spacer(minLength: 0)
+        } else {
+            Text("—")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
         }
-        .padding(12)
-        .foregroundStyle(.white)
-        .redacted(reason: placeholder ? .placeholder : [])
     }
+}
+
+private func nameColumnWidth(compact: Bool) -> CGFloat {
+    compact ? 76 : 92
 }
 
 // MARK: - Bits
@@ -222,19 +269,13 @@ private struct MeterRing: View {
     var body: some View {
         let pct = max(0, min(100, remaining))
         ZStack {
-            Circle().stroke(Color.white.opacity(0.14), lineWidth: 6)
+            Circle().stroke(Color.white.opacity(0.12), lineWidth: 3)
             Circle().trim(from: 0, to: CGFloat(Double(pct) / 100.0))
-                .stroke(Color(hex: hex), style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                .stroke(Color(hex: hex), style: StrokeStyle(lineWidth: 3, lineCap: .round))
                 .rotationEffect(.degrees(-90))
             Text("\(pct)%")
-                .font(.caption.monospacedDigit())
+                .font(.system(size: 9, weight: .medium).monospacedDigit())
+                .foregroundStyle(.white)
         }
     }
-}
-
-private func remainingColor(_ remaining: Int?) -> Color {
-    guard let remaining else { return .secondary }
-    if remaining < 15 { return .red }
-    if remaining < 40 { return .orange }
-    return .white
 }

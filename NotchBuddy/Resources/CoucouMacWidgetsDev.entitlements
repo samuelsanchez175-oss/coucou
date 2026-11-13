@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>group.fr.louisraille.Coucou</string>
+    </array>
+    <!--
+      Local-dev escape hatch: on signed builds whose team does not own the
+      App Group above, Group Container writes fail silently. Granting read
+      on ~/Library/Application Support/Coucou/ lets the sandboxed widget
+      still see the snapshot that the main app also mirrors there. Not
+      accepted by the Mac App Store review — this file is only used by the
+      Developer-ID `NotchBuddy` dev build.
+    -->
+    <key>com.apple.security.temporary-exception.files.home-relative-path.read-only</key>
+    <array>
+        <string>/Library/Application Support/Coucou/</string>
+    </array>
+</dict>
+</plist>

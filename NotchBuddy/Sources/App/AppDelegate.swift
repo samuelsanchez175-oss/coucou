@@ -20,6 +20,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.setActivationPolicy(.accessory)
         setupMenuBarItem()
         setupIsland()
+        // Start usage polling at launch so the Mac widget has a live snapshot
+        // before the user opens the island. start() loads saved readings from
+        // disk and writes the snapshot immediately, then refreshes.
+        UsageMonitor.shared.start()
         #if DEBUG
         let debugMenu = NSMenu(title: "Debug")
         debugMenu.addItem(NSMenuItem(title: "Render recap image", action: #selector(renderRecapImage), keyEquivalent: ""))
